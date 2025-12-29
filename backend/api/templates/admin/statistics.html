@@ -1,0 +1,160 @@
+{% extends 'unfold/layouts/base.html' %}
+{% load i18n %}
+
+{% block content %}
+<div class="p-4">
+    <h1 class="text-2xl font-bold mb-6 text-gray-900 dark:text-gray-100">統計ダッシュボード</h1>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">総予約数</h3>
+            <p class="text-3xl font-bold text-gray-900 dark:text-gray-100 mt-2">{{ summary.total_reservations }}</p>
+        </div>
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">総チケット販売数</h3>
+            <p class="text-3xl font-bold text-primary-600 mt-2">{{ summary.total_tickets }}</p>
+        </div>
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">チェックイン済み</h3>
+            <p class="text-3xl font-bold text-green-600 mt-2">{{ summary.checked_in_count }}</p>
+            <p class="text-sm text-gray-500 mt-1">率: {{ summary.check_in_rate }}%</p>
+        </div>
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">キャンセル数</h3>
+            <p class="text-3xl font-bold text-red-600 mt-2">{{ summary.cancelled_count }}</p>
+        </div>
+    </div>
+
+    <!-- Charts Row 1 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <!-- Attribute Distribution -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">券種別販売数</h3>
+            <div class="relative h-64">
+                <canvas id="attributeChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Check-in Status -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+            <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">入場状況</h3>
+            <div class="relative h-64">
+                <canvas id="statusChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row 2 -->
+    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 mb-8">
+        <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">時間枠別販売数</h3>
+        <div class="relative h-80">
+            <canvas id="slotChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // Data from Django context
+    const attributeData = {{ by_attribute_json|safe }};
+    const slotData = {{ by_slot_json|safe }};
+    const summary = {{ summary_json|safe }};
+
+    // Colors
+    const colors = [
+        'rgba(168, 85, 247, 0.7)', // Primary
+        'rgba(59, 130, 246, 0.7)', // Blue
+        'rgba(16, 185, 129, 0.7)', // Green
+        'rgba(245, 158, 11, 0.7)', // Amber
+        'rgba(239, 68, 68, 0.7)',  // Red
+        'rgba(236, 72, 153, 0.7)', // Pink
+    ];
+
+    // Attribute Chart
+    new Chart(document.getElementById('attributeChart'), {
+        type: 'doughnut',
+        data: {
+            labels: attributeData.map(d => d.attribute__display_name),
+            datasets: [{
+                data: attributeData.map(d => d.count),
+                backgroundColor: colors,
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: { color: '#9ca3af' }
+                }
+            }
+        }
+    });
+
+    // Status Chart
+    new Chart(document.getElementById('statusChart'), {
+        type: 'pie',
+        data: {
+            labels: ['未入場', '入場済み', 'キャンセル'],
+            datasets: [{
+                data: [
+                    summary.total_tickets - summary.checked_in_count - summary.cancelled_count,
+                    summary.checked_in_count,
+                    summary.cancelled_count
+                ],
+                backgroundColor: [
+                    'rgba(156, 163, 175, 0.7)', // Gray
+                    'rgba(16, 185, 129, 0.7)',  // Green
+                    'rgba(239, 68, 68, 0.7)'    // Red
+                ],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: { color: '#9ca3af' }
+                }
+            }
+        }
+    });
+
+    // Slot Chart
+    new Chart(document.getElementById('slotChart'), {
+        type: 'bar',
+        data: {
+            labels: slotData.map(d => `${d.slot__event_date} ${d.slot__start_time}`),
+            datasets: [{
+                label: '販売数',
+                data: slotData.map(d => d.count),
+                backgroundColor: 'rgba(168, 85, 247, 0.7)',
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(156, 163, 175, 0.1)' },
+                    ticks: { color: '#9ca3af' }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: { color: '#9ca3af' }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
+</script>
+{% endblock %}
