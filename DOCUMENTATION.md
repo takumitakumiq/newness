@@ -169,5 +169,10 @@ python manage.py migrate
 │   ├── app/                # ページごとのファイル
 │   └── components/         # ボタンやフォームなどの部品
 ├── start_dev_new.sh        # 起動するための便利ツール
+├── CODE_EXPLANATION.md     # ★コードの詳細解説書（開発者向け）
 └── DOCUMENTATION.md        # この説明書
 ```
+
+## 8. コードの詳細について
+プログラムの中身を詳しく知りたい場合は、新しく作成した **[CODE_EXPLANATION.md](CODE_EXPLANATION.md)** を参照してください。
+各ファイルの役割や、重要なロジック（動的フォームや在庫管理の仕組みなど）について詳細に解説しています。
