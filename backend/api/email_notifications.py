@@ -9,6 +9,14 @@ from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
 
+# Constants
+DEFAULT_FROM_EMAIL = 'noreply@matsu-tickets.local'
+
+
+def _get_from_email():
+    """Get the from email address with fallback"""
+    return getattr(settings, 'DEFAULT_FROM_EMAIL', DEFAULT_FROM_EMAIL)
+
 
 def send_reservation_confirmation(reservation):
     """
@@ -68,7 +76,7 @@ MATSU チケットシステム
         send_mail(
             subject=subject,
             message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') else 'noreply@matsu-tickets.local',
+            from_email=_get_from_email(),
             recipient_list=[reservation.user_email],
             fail_silently=False,
         )
@@ -119,7 +127,7 @@ MATSU チケットシステム
         send_mail(
             subject=subject,
             message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') else 'noreply@matsu-tickets.local',
+            from_email=_get_from_email(),
             recipient_list=[transfer.ticket.reservation.user_email],
             fail_silently=False,
         )
@@ -167,7 +175,7 @@ MATSU チケットシステム
         send_mail(
             subject=subject,
             message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL if hasattr(settings, 'DEFAULT_FROM_EMAIL') else 'noreply@matsu-tickets.local',
+            from_email=_get_from_email(),
             recipient_list=[ticket.reservation.user_email],
             fail_silently=False,
         )

@@ -263,7 +263,7 @@ class CheckInView(APIView):
             ticket = Ticket.objects.select_for_update().get(id=ticket_uuid)
         except Ticket.DoesNotExist:
             logger.warning(f"Check-in failed: Ticket not found - {ticket_uuid}")
-            self._log_checkin(ticket_uuid, 'not_found', False, 'チケットが見つかりません', device_id, operator)
+            # Note: Cannot log to CheckInLog without a ticket reference
             return Response(
                 {"success": False, "message": "チケットが見つかりません"},
                 status=status.HTTP_404_NOT_FOUND
@@ -307,17 +307,19 @@ class CheckInView(APIView):
             status=status.HTTP_200_OK
         )
     
-    def _log_checkin(self, ticket_or_uuid, action, success, message, device_id, operator):
-        """Create audit log for check-in attempt."""
-        if isinstance(ticket_or_uuid, Ticket):
-            CheckInLog.objects.create(
-                ticket=ticket_or_uuid,
-                action=action,
-                success=success,
-                message=message,
-                device_id=device_id,
-                operator=operator
-            )
+    def _log_checkin(self, ticket, action, success, message, device_id, operator):
+        """
+        Create audit log for check-in attempt.
+        Note: Only accepts Ticket instances, not UUIDs.
+        """
+        CheckInLog.objects.create(
+            ticket=ticket,
+            action=action,
+            success=success,
+            message=message,
+            device_id=device_id,
+            operator=operator
+        )
 
 
 @api_view(['GET'])

@@ -95,7 +95,7 @@ export function getStatusColor(status: string): string {
  * Generate unique ID for cart items
  */
 export function generateCartItemId(): string {
-  return `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `cart-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**

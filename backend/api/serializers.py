@@ -12,6 +12,10 @@ from datetime import timedelta
 from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
 
 
+# Constants
+MAX_TICKETS_PER_CHECKOUT = 50
+
+
 def sanitize_string(value):
     """Sanitize string input to prevent XSS"""
     if isinstance(value, str):
@@ -128,8 +132,8 @@ class CheckoutRequestSerializer(serializers.Serializer):
     def validate_tickets(self, value):
         if not value:
             raise serializers.ValidationError("チケットを1つ以上選択してください。")
-        if len(value) > 50:  # Limit to prevent abuse
-            raise serializers.ValidationError("一度に予約できるチケットは50枚までです。")
+        if len(value) > MAX_TICKETS_PER_CHECKOUT:  # Limit to prevent abuse
+            raise serializers.ValidationError(f"一度に予約できるチケットは{MAX_TICKETS_PER_CHECKOUT}枚までです。")
         return value
     
     def validate(self, data):

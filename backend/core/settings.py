@@ -9,13 +9,13 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
+
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # Security warning for production
 if not os.getenv('DJANGO_SECRET_KEY') and not DEBUG:
     raise ValueError('DJANGO_SECRET_KEY must be set in production')
-
-DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 

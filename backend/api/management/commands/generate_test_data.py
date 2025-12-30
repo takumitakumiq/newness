@@ -173,10 +173,13 @@ class Command(BaseCommand):
                     'name': f'{user.last_name} {user.first_name}',
                 }
                 
-                if 'phone' in [f['key'] for f in attribute.form_schema]:
+                # Create set of field keys for efficient lookup
+                schema_field_keys = {f['key'] for f in attribute.form_schema}
+                
+                if 'phone' in schema_field_keys:
                     guest_info['phone'] = f'090-{random.randint(1000,9999)}-{random.randint(1000,9999)}'
                 
-                if 'grade' in [f['key'] for f in attribute.form_schema]:
+                if 'grade' in schema_field_keys:
                     guest_info['grade'] = random.choice(['中1', '中2', '中3'])
                 
                 # Random status
