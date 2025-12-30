@@ -6,6 +6,13 @@ venv/
 .venv/
 *.sqlite3
 
+# Django specific
+*.log
+logs/
+backups/
+staticfiles/
+media/
+
 # Node
 node_modules/
 npm-debug.log
@@ -31,3 +38,13 @@ Thumbs.db
 .idea/
 frontend/
 frontend_broken*/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Deployment
+*.pid
+*.sock

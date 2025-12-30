@@ -1,13 +1,34 @@
 """
 MATSU - API Serializers
 """
+import re
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils import timezone
+from django.utils.html import escape
 from datetime import timedelta
 from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
+
+
+# Constants
+MAX_TICKETS_PER_CHECKOUT = 50
+
+
+def sanitize_string(value):
+    """Sanitize string input to prevent XSS"""
+    if isinstance(value, str):
+        return escape(value.strip())
+    return value
+
+
+def validate_email_format(email):
+    """Validate email format"""
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(pattern, email):
+        raise serializers.ValidationError("無効なメールアドレス形式です。")
+    return email
 
 
 class EntrySlotSerializer(serializers.ModelSerializer):
@@ -94,9 +115,25 @@ class CheckoutRequestSerializer(serializers.Serializer):
     user_email = serializers.EmailField(required=False, allow_blank=True)
     tickets = TicketRequestSerializer(many=True)
     
+    def validate_user_name(self, value):
+        """Sanitize user name to prevent XSS"""
+        return sanitize_string(value)
+    
+    def validate_user_email(self, value):
+        """Validate and sanitize email"""
+        if value:
+            return validate_email_format(value)
+        return value
+    
+    def validate_guest_identifier(self, value):
+        """Sanitize guest identifier"""
+        return sanitize_string(value)
+    
     def validate_tickets(self, value):
         if not value:
             raise serializers.ValidationError("チケットを1つ以上選択してください。")
+        if len(value) > MAX_TICKETS_PER_CHECKOUT:  # Limit to prevent abuse
+            raise serializers.ValidationError(f"一度に予約できるチケットは{MAX_TICKETS_PER_CHECKOUT}枚までです。")
         return value
     
     def validate(self, data):
