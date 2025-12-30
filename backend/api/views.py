@@ -389,20 +389,38 @@ class AdminStatisticsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        total_reservations = Reservation.objects.count()
-        total_tickets = Ticket.objects.count()
-        checked_in_count = Ticket.objects.filter(status=Ticket.Status.ENTERED).count()
-        cancelled_count = Ticket.objects.filter(status=Ticket.Status.CANCELLED).count()
+        logger.info(f"Admin statistics accessed by {request.user.username}")
+        
+        # Get filter parameters
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        # Base querysets
+        reservations_qs = Reservation.objects.all()
+        tickets_qs = Ticket.objects.all()
+        
+        # Apply date filters if provided
+        if date_from:
+            reservations_qs = reservations_qs.filter(created_at__date__gte=date_from)
+            tickets_qs = tickets_qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            reservations_qs = reservations_qs.filter(created_at__date__lte=date_to)
+            tickets_qs = tickets_qs.filter(created_at__date__lte=date_to)
+        
+        total_reservations = reservations_qs.count()
+        total_tickets = tickets_qs.count()
+        checked_in_count = tickets_qs.filter(status=Ticket.Status.ENTERED).count()
+        cancelled_count = tickets_qs.filter(status=Ticket.Status.CANCELLED).count()
         
         # Tickets by attribute
-        tickets_by_attribute = Ticket.objects.values(
+        tickets_by_attribute = tickets_qs.values(
             'attribute__display_name'
         ).annotate(
             count=Count('id')
         ).order_by('-count')
         
         # Tickets by slot
-        tickets_by_slot = Ticket.objects.values(
+        tickets_by_slot = tickets_qs.values(
             'slot__event_date', 'slot__start_time'
         ).annotate(
             count=Count('id')
@@ -414,7 +432,7 @@ class AdminStatisticsView(APIView):
         sales_trend = []
         
         for date in last_7_days:
-            count = Ticket.objects.filter(created_at__date=date).count()
+            count = tickets_qs.filter(created_at__date=date).count()
             sales_trend.append({
                 'date': date.strftime('%Y-%m-%d'),
                 'count': count
@@ -427,7 +445,7 @@ class AdminStatisticsView(APIView):
             recent_activity_data.append({
                 'action': log.action,
                 'ticket_id': str(log.ticket.id),
-                'user_name': log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown',
+                'user_name': escape(log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown'),
                 'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 'success': log.success
             })
@@ -591,22 +609,44 @@ class ManualCheckInView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
-        """検索機能"""
+        """検索機能 - Enhanced with more filters"""
         query = request.query_params.get('q', '')
-        if len(query) < 2:
-            return Response({"results": []})
+        status = request.query_params.get('status', '')
+        slot_id = request.query_params.get('slot_id', '')
+        attribute_id = request.query_params.get('attribute_id', '')
         
-        tickets = Ticket.objects.filter(
-            models.Q(id__icontains=query) |
-            models.Q(reservation__user_name__icontains=query) |
-            models.Q(reservation__user_email__icontains=query) |
-            models.Q(guest_info__name__icontains=query)
-        ).select_related(
+        tickets = Ticket.objects.select_related(
             'slot', 'attribute', 'reservation'
-        ).order_by('-created_at')[:20]
+        ).order_by('-created_at')
+        
+        # Text search
+        if len(query) >= 2:
+            tickets = tickets.filter(
+                models.Q(id__icontains=query) |
+                models.Q(reservation__user_name__icontains=query) |
+                models.Q(reservation__user_email__icontains=query) |
+                models.Q(reservation__id__icontains=query) |
+                models.Q(guest_info__name__icontains=query)
+            )
+        
+        # Status filter
+        if status:
+            tickets = tickets.filter(status=status)
+        
+        # Slot filter
+        if slot_id:
+            tickets = tickets.filter(slot_id=slot_id)
+        
+        # Attribute filter
+        if attribute_id:
+            tickets = tickets.filter(attribute_id=attribute_id)
+        
+        # Limit results
+        tickets = tickets[:50]
         
         return Response({
-            "results": TicketSerializer(tickets, many=True).data
+            "results": TicketSerializer(tickets, many=True).data,
+            "count": tickets.count()
         })
     
     @transaction.atomic

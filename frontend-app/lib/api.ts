@@ -50,19 +50,58 @@ async function fetchApi<T>(
     }
   }
   
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+    });
 
-  if (!response.ok) {
-    const error: ApiError = await response.json().catch(() => ({
-      message: `HTTP Error: ${response.status}`,
-    }));
+    // Handle specific HTTP status codes
+    if (response.status === 401) {
+      // Unauthorized - clear token and redirect to login
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        // Let the auth store handle the redirect
+      }
+      throw { message: '認証が必要です。ログインしてください。', status: 401 };
+    }
+
+    if (response.status === 403) {
+      throw { message: 'この操作を実行する権限がありません。', status: 403 };
+    }
+
+    if (response.status === 404) {
+      throw { message: '要求されたリソースが見つかりません。', status: 404 };
+    }
+
+    if (response.status === 429) {
+      throw { message: 'リクエストが多すぎます。しばらく待ってから再試行してください。', status: 429 };
+    }
+
+    if (response.status === 500) {
+      throw { message: 'サーバーエラーが発生しました。しばらく待ってから再試行してください。', status: 500 };
+    }
+
+    if (!response.ok) {
+      const error: ApiError = await response.json().catch(() => ({
+        message: `HTTP Error: ${response.status}`,
+      }));
+      throw error;
+    }
+
+    return response.json();
+  } catch (error: any) {
+    // Network errors
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      throw { 
+        message: 'ネットワークエラーが発生しました。インターネット接続を確認してください。',
+        status: 0
+      };
+    }
+    // Re-throw API errors
     throw error;
   }
-
-  return response.json();
 }
 
 // === Entry Slots ===
