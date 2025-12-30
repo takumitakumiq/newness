@@ -15,6 +15,8 @@ router.register(r'slots', views.EntrySlotViewSet, basename='slots')
 router.register(r'attributes', views.AttributeConfigViewSet, basename='attributes')
 router.register(r'reservations', views.ReservationViewSet, basename='reservations')
 router.register(r'tickets', views.TicketViewSet, basename='tickets')
+router.register(r'announcements', views.AnnouncementViewSet, basename='announcements')
+router.register(r'promocodes', views.PromoCodeViewSet, basename='promocodes')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -22,6 +24,8 @@ urlpatterns = [
     path('checkin', views.CheckInView.as_view(), name='checkin'),
     path('health', views.health_check, name='health'),
     path('admin/statistics', views.AdminStatisticsView.as_view(), name='admin_statistics'),
+    path('admin/manual-checkin', views.ManualCheckInView.as_view(), name='manual_checkin'),
+    path('admin/realtime-monitor', views.RealtimeMonitorView.as_view(), name='realtime_monitor'),
     
     # Authentication endpoints
     path('auth/register', views.UserRegistrationView.as_view(), name='register'),
@@ -33,4 +37,9 @@ urlpatterns = [
     # Mypage endpoints
     path('mypage/reservations', views.MyReservationsView.as_view(), name='my_reservations'),
     path('mypage/tickets', views.MyTicketsView.as_view(), name='my_tickets'),
+    path('mypage/transfers', views.MyTransfersView.as_view(), name='my_transfers'),
+    
+    # Ticket Transfer endpoints
+    path('transfers/create', views.TicketTransferCreateView.as_view(), name='transfer_create'),
+    path('transfers/accept', views.TicketTransferAcceptView.as_view(), name='transfer_accept'),
 ]

@@ -2,64 +2,381 @@
 {% load i18n %}
 
 {% block content %}
-<div class="p-4">
-    <h1 class="text-2xl font-bold mb-6 text-gray-900 dark:text-gray-100">統計ダッシュボード</h1>
-
-    <!-- Summary Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">総予約数</h3>
-            <p class="text-3xl font-bold text-gray-900 dark:text-gray-100 mt-2">{{ summary.total_reservations }}</p>
+<div class="p-6 max-w-7xl mx-auto">
+    <!-- Header Section -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">統計ダッシュボード</h1>
+            <p class="text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-2">
+                <span class="material-symbols-outlined text-sm">calendar_today</span>
+                <span id="currentDate">Loading...</span>
+                <span class="text-gray-300 dark:text-gray-600">|</span>
+                <span id="currentTime" class="font-mono">--:--:--</span>
+            </p>
         </div>
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">総チケット販売数</h3>
-            <p class="text-3xl font-bold text-primary-600 mt-2">{{ summary.total_tickets }}</p>
-        </div>
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">チェックイン済み</h3>
-            <p class="text-3xl font-bold text-green-600 mt-2">{{ summary.checked_in_count }}</p>
-            <p class="text-sm text-gray-500 mt-1">率: {{ summary.check_in_rate }}%</p>
-        </div>
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">キャンセル数</h3>
-            <p class="text-3xl font-bold text-red-600 mt-2">{{ summary.cancelled_count }}</p>
+        
+        <!-- Global Actions -->
+        <div class="flex gap-3">
+            <div class="relative group">
+                <button class="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-lg">download</span>
+                    エクスポート
+                </button>
+                <div class="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 hidden group-hover:block z-20 overflow-hidden">
+                    <div class="p-2">
+                        <a href="{% url 'admin_csv_export' %}?type=reservations" class="flex items-center gap-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                            <span class="material-symbols-outlined text-gray-400">list_alt</span>
+                            予約リスト
+                        </a>
+                        <a href="{% url 'admin_csv_export' %}?type=tickets" class="flex items-center gap-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                            <span class="material-symbols-outlined text-gray-400">confirmation_number</span>
+                            チケットリスト
+                        </a>
+                        <a href="{% url 'admin_csv_export' %}?type=checkins" class="flex items-center gap-3 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+                            <span class="material-symbols-outlined text-gray-400">history</span>
+                            チェックイン記録
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <a href="/admin/api/announcement/add/" class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm flex items-center gap-2">
+                <span class="material-symbols-outlined text-lg">campaign</span>
+                お知らせ作成
+            </a>
         </div>
     </div>
 
-    <!-- Charts Row 1 -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        <!-- Attribute Distribution -->
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">券種別販売数</h3>
-            <div class="relative h-64">
-                <canvas id="attributeChart"></canvas>
+    <!-- Quick Stats Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <!-- Total Reservations -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 relative overflow-hidden group hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <span class="material-symbols-outlined text-6xl text-blue-500">book_online</span>
+            </div>
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">総予約数</h3>
+            <div class="flex items-baseline gap-2">
+                <p class="text-3xl font-bold text-gray-900 dark:text-gray-100">{{ summary.total_reservations }}</p>
+                <span class="text-xs text-gray-400">件</span>
             </div>
         </div>
 
-        <!-- Check-in Status -->
-        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-            <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">入場状況</h3>
-            <div class="relative h-64">
-                <canvas id="statusChart"></canvas>
+        <!-- Total Tickets -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 relative overflow-hidden group hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <span class="material-symbols-outlined text-6xl text-purple-500">confirmation_number</span>
+            </div>
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">総チケット販売数</h3>
+            <div class="flex items-baseline gap-2">
+                <p class="text-3xl font-bold text-primary-600">{{ summary.total_tickets }}</p>
+                <span class="text-xs text-gray-400">枚</span>
+            </div>
+        </div>
+
+        <!-- Check-in Rate -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 relative overflow-hidden group hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <span class="material-symbols-outlined text-6xl text-green-500">how_to_reg</span>
+            </div>
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">チェックイン済み</h3>
+            <div class="flex items-baseline gap-2">
+                <p class="text-3xl font-bold text-green-600">{{ summary.checked_in_count }}</p>
+                <span class="text-sm font-medium text-green-600 bg-green-50 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
+                    {{ summary.check_in_rate }}%
+                </span>
+            </div>
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mt-3">
+                <div class="bg-green-500 h-1.5 rounded-full" style="width: {{ summary.check_in_rate }}%"></div>
+            </div>
+        </div>
+
+        <!-- Cancellations -->
+        <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 relative overflow-hidden group hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                <span class="material-symbols-outlined text-6xl text-red-500">cancel</span>
+            </div>
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">キャンセル数</h3>
+            <div class="flex items-baseline gap-2">
+                <p class="text-3xl font-bold text-red-600">{{ summary.cancelled_count }}</p>
+                <span class="text-xs text-gray-400">件</span>
             </div>
         </div>
     </div>
 
-    <!-- Charts Row 2 -->
-    <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 mb-8">
-        <h3 class="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">時間枠別販売数</h3>
-        <div class="relative h-80">
-            <canvas id="slotChart"></canvas>
+    <!-- Main Content Tabs -->
+    <div x-data="{ activeTab: 'overview' }" class="space-y-6">
+        <!-- Tab Navigation -->
+        <div class="border-b border-gray-200 dark:border-gray-700">
+            <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                <button @click="activeTab = 'overview'" 
+                    :class="activeTab === 'overview' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-lg">dashboard</span>
+                    概要・分析
+                </button>
+                <button @click="activeTab = 'operations'" 
+                    :class="activeTab === 'operations' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-lg">settings_accessibility</span>
+                    オペレーション
+                </button>
+                <button @click="activeTab = 'visitors'" 
+                    :class="activeTab === 'visitors' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-lg">groups</span>
+                    入場者リスト
+                </button>
+                <button @click="activeTab = 'activity'" 
+                    :class="activeTab === 'activity' ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2">
+                    <span class="material-symbols-outlined text-lg">history</span>
+                    アクティビティログ
+                </button>
+            </nav>
+        </div>
+
+        <!-- Tab: Overview -->
+        <div x-show="activeTab === 'overview'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+            <!-- Sales Trend Chart -->
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">売上推移 (過去7日間)</h3>
+                    <span class="text-xs text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">自動更新</span>
+                </div>
+                <div class="relative h-72">
+                    <canvas id="salesTrendChart"></canvas>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Attribute Distribution -->
+                <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                    <h3 class="text-lg font-bold mb-6 text-gray-900 dark:text-gray-100">券種別販売数</h3>
+                    <div class="relative h-64">
+                        <canvas id="attributeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Check-in Status -->
+                <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                    <h3 class="text-lg font-bold mb-6 text-gray-900 dark:text-gray-100">入場状況</h3>
+                    <div class="relative h-64">
+                        <canvas id="statusChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Slot Chart -->
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <h3 class="text-lg font-bold mb-6 text-gray-900 dark:text-gray-100">時間枠別販売数</h3>
+                <div class="relative h-80">
+                    <canvas id="slotChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Operations -->
+        <div x-show="activeTab === 'operations'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+            <!-- Manual Check-in Section -->
+            <div class="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <div class="max-w-3xl mx-auto">
+                    <div class="text-center mb-8">
+                        <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-600 mb-4">
+                            <span class="material-symbols-outlined text-3xl">qr_code_scanner</span>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">入場者検索・手動チェックイン</h2>
+                        <p class="text-gray-500 dark:text-gray-400 mt-2">QRコードが読み取れない場合や、詳細情報の確認に使用してください。</p>
+                    </div>
+
+                    <div class="flex gap-3 mb-8">
+                        <div class="relative flex-1">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <span class="material-symbols-outlined text-gray-400">search</span>
+                            </div>
+                            <input type="text" id="manualCheckinInput" 
+                                class="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 text-sm rounded-xl focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 p-3" 
+                                placeholder="チケットID / 名前 / メールアドレス / フォーム回答内容"
+                                onkeypress="if(event.key === 'Enter') searchTicket()">
+                        </div>
+                        <button onclick="searchTicket()" class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-xl text-sm font-bold transition-all shadow-sm hover:shadow-md flex items-center gap-2">
+                            検索
+                        </button>
+                    </div>
+
+                    <div id="searchResults" class="hidden">
+                        <div class="bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                            <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                                <thead class="text-xs text-gray-700 uppercase bg-gray-100 dark:bg-gray-800 dark:text-gray-400">
+                                    <tr>
+                                        <th class="px-6 py-3">チケット情報</th>
+                                        <th class="px-6 py-3">予約者</th>
+                                        <th class="px-6 py-3">ステータス</th>
+                                        <th class="px-6 py-3 text-right">アクション</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="searchResultsBody" class="divide-y divide-gray-200 dark:divide-gray-700"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Visitors -->
+        <div x-show="activeTab === 'visitors'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        <span class="material-symbols-outlined text-gray-400">groups</span>
+                        全チケット・入場者リスト
+                    </h3>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <span class="material-symbols-outlined text-gray-400 text-sm">search</span>
+                        </div>
+                        <input type="text" id="visitorSearch" onkeyup="filterVisitors()" 
+                            class="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block pl-9 p-2" 
+                            placeholder="検索...">
+                    </div>
+                </div>
+                <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
+                    <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400" id="visitorTable">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400 sticky top-0 z-10">
+                            <tr>
+                                <th class="px-4 py-3">チケットID</th>
+                                <th class="px-4 py-3">氏名 (ゲスト/予約者)</th>
+                                <th class="px-4 py-3">券種</th>
+                                <th class="px-4 py-3">入場枠</th>
+                                <th class="px-4 py-3">ステータス</th>
+                                <th class="px-4 py-3">購入日</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                            {% for ticket in all_tickets %}
+                            <tr class="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                                <td class="px-4 py-3 font-mono text-xs">{{ ticket.id|slice:":8" }}...</td>
+                                <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">
+                                    <div>{{ ticket.guest_info.name|default:ticket.reservation.user_name }}</div>
+                                    <div class="text-xs text-gray-400">{{ ticket.guest_info.email|default:ticket.reservation.user_email }}</div>
+                                </td>
+                                <td class="px-4 py-3">{{ ticket.attribute.display_name }}</td>
+                                <td class="px-4 py-3 text-xs">
+                                    {{ ticket.slot.event_date }}<br>
+                                    {{ ticket.slot.start_time }}
+                                </td>
+                                <td class="px-4 py-3">
+                                    {% if ticket.status == 'valid' %}
+                                    <span class="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">有効</span>
+                                    {% elif ticket.status == 'entered' %}
+                                    <span class="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300">入場済</span>
+                                    {% elif ticket.status == 'cancelled' %}
+                                    <span class="px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300">キャンセル</span>
+                                    {% else %}
+                                    <span class="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">{{ ticket.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-xs">{{ ticket.created_at|date:"Y/m/d H:i" }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Activity -->
+        <div x-show="activeTab === 'activity'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <h3 class="text-lg font-bold mb-6 text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                    <span class="material-symbols-outlined text-gray-400">history</span>
+                    最近のアクティビティログ
+                </h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                            <tr>
+                                <th class="px-4 py-3">日時</th>
+                                <th class="px-4 py-3">アクション</th>
+                                <th class="px-4 py-3">チケットID</th>
+                                <th class="px-4 py-3">ユーザー</th>
+                                <th class="px-4 py-3">結果</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                            {% for log in recent_activity %}
+                            <tr class="bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                                <td class="px-4 py-3 font-mono text-xs">{{ log.timestamp }}</td>
+                                <td class="px-4 py-3">
+                                    <span class="px-2 py-1 rounded-md text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                        {{ log.action }}
+                                    </span>
+                                </td>
+                                <td class="px-4 py-3 font-mono text-xs text-gray-400">{{ log.ticket_id|slice:":8" }}...</td>
+                                <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{{ log.user_name }}</td>
+                                <td class="px-4 py-3">
+                                    {% if log.success %}
+                                    <span class="inline-flex items-center gap-1 text-green-600 text-xs font-medium bg-green-50 dark:bg-green-900/20 px-2 py-1 rounded-full">
+                                        <span class="material-symbols-outlined text-sm">check_circle</span> 成功
+                                    </span>
+                                    {% else %}
+                                    <span class="inline-flex items-center gap-1 text-red-600 text-xs font-medium bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded-full">
+                                        <span class="material-symbols-outlined text-sm">error</span> 失敗
+                                    </span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="px-4 py-8 text-center text-gray-500">データがありません</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ticket Detail Modal -->
+    <div id="ticketDetailModal" class="fixed inset-0 bg-gray-900/60 backdrop-blur-sm hidden items-center justify-center z-50 transition-opacity">
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden transform transition-all scale-100">
+            <div class="p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50">
+                <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                    <span class="material-symbols-outlined text-primary-600">confirmation_number</span>
+                    チケット詳細
+                </h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="p-6 space-y-6" id="modalContent">
+                <!-- Content will be injected here -->
+            </div>
+            <div class="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end bg-gray-50 dark:bg-gray-800/50">
+                <button onclick="closeModal()" class="bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 px-5 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm">
+                    閉じる
+                </button>
+            </div>
         </div>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+    // Clock
+    function updateClock() {
+        const now = new Date();
+        const dateOptions = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' };
+        document.getElementById('currentDate').textContent = now.toLocaleDateString('ja-JP', dateOptions);
+        document.getElementById('currentTime').textContent = now.toLocaleTimeString('ja-JP');
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
     // Data from Django context
     const attributeData = {{ by_attribute_json|safe }};
     const slotData = {{ by_slot_json|safe }};
     const summary = {{ summary_json|safe }};
+    const salesTrendData = {{ sales_trend_json|safe }};
 
     // Colors
     const colors = [
@@ -71,6 +388,56 @@
         'rgba(236, 72, 153, 0.7)', // Pink
     ];
 
+    // Chart Defaults
+    Chart.defaults.font.family = "'Inter', sans-serif";
+    Chart.defaults.color = '#9ca3af';
+
+    // Sales Trend Chart
+    new Chart(document.getElementById('salesTrendChart'), {
+        type: 'line',
+        data: {
+            labels: salesTrendData.map(d => d.date),
+            datasets: [{
+                label: '販売数',
+                data: salesTrendData.map(d => d.count),
+                borderColor: '#7c3aed', // Primary 600
+                backgroundColor: 'rgba(124, 58, 237, 0.1)',
+                borderWidth: 3,
+                pointBackgroundColor: '#fff',
+                pointBorderColor: '#7c3aed',
+                pointBorderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: 'rgba(17, 24, 39, 0.9)',
+                    padding: 12,
+                    cornerRadius: 8,
+                    displayColors: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(156, 163, 175, 0.1)', drawBorder: false },
+                    ticks: { stepSize: 1, padding: 10 }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: { padding: 10 }
+                }
+            }
+        }
+    });
+
     // Attribute Chart
     new Chart(document.getElementById('attributeChart'), {
         type: 'doughnut',
@@ -79,16 +446,18 @@
             datasets: [{
                 data: attributeData.map(d => d.count),
                 backgroundColor: colors,
-                borderWidth: 0
+                borderWidth: 0,
+                hoverOffset: 4
             }]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            cutout: '70%',
             plugins: {
                 legend: {
                     position: 'right',
-                    labels: { color: '#9ca3af' }
+                    labels: { usePointStyle: true, padding: 20, font: { size: 12 } }
                 }
             }
         }
@@ -106,11 +475,12 @@
                     summary.cancelled_count
                 ],
                 backgroundColor: [
-                    'rgba(156, 163, 175, 0.7)', // Gray
-                    'rgba(16, 185, 129, 0.7)',  // Green
-                    'rgba(239, 68, 68, 0.7)'    // Red
+                    'rgba(209, 213, 219, 0.8)', // Gray
+                    'rgba(16, 185, 129, 0.8)',  // Green
+                    'rgba(239, 68, 68, 0.8)'    // Red
                 ],
-                borderWidth: 0
+                borderWidth: 0,
+                hoverOffset: 4
             }]
         },
         options: {
@@ -119,7 +489,7 @@
             plugins: {
                 legend: {
                     position: 'right',
-                    labels: { color: '#9ca3af' }
+                    labels: { usePointStyle: true, padding: 20, font: { size: 12 } }
                 }
             }
         }
@@ -133,8 +503,9 @@
             datasets: [{
                 label: '販売数',
                 data: slotData.map(d => d.count),
-                backgroundColor: 'rgba(168, 85, 247, 0.7)',
-                borderRadius: 4
+                backgroundColor: '#7c3aed',
+                borderRadius: 6,
+                barThickness: 20
             }]
         },
         options: {
@@ -143,12 +514,12 @@
             scales: {
                 y: {
                     beginAtZero: true,
-                    grid: { color: 'rgba(156, 163, 175, 0.1)' },
-                    ticks: { color: '#9ca3af' }
+                    grid: { color: 'rgba(156, 163, 175, 0.1)', drawBorder: false },
+                    ticks: { padding: 10 }
                 },
                 x: {
                     grid: { display: false },
-                    ticks: { color: '#9ca3af' }
+                    ticks: { padding: 10 }
                 }
             },
             plugins: {
@@ -156,5 +527,234 @@
             }
         }
     });
+
+    // Manual Check-in Logic
+    let currentSearchResults = [];
+
+    async function searchTicket() {
+        const query = document.getElementById('manualCheckinInput').value;
+        if (!query) return;
+
+        const btn = document.querySelector('button[onclick="searchTicket()"]');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<span class="material-symbols-outlined animate-spin">refresh</span>';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch(`/api/admin/manual-checkin?q=${encodeURIComponent(query)}`);
+            const data = await res.json();
+            
+            currentSearchResults = data.results || [];
+            const tbody = document.getElementById('searchResultsBody');
+            tbody.innerHTML = '';
+            
+            if (currentSearchResults.length > 0) {
+                document.getElementById('searchResults').classList.remove('hidden');
+                currentSearchResults.forEach(ticket => {
+                    const tr = document.createElement('tr');
+                    tr.className = 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors';
+                    tr.innerHTML = `
+                        <td class="px-6 py-4">
+                            <div class="flex flex-col">
+                                <span class="font-mono text-xs text-gray-500">${ticket.id}</span>
+                                <span class="text-sm font-medium text-gray-900 dark:text-gray-100">${ticket.attribute_detail.display_name}</span>
+                                <span class="text-xs text-gray-500">${ticket.slot_detail.event_date} ${ticket.slot_detail.start_time}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="flex flex-col">
+                                <span class="font-medium text-gray-900 dark:text-gray-100">${ticket.guest_info.name || 'ゲスト'}</span>
+                                <span class="text-xs text-gray-500">${ticket.reservation_id}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <span class="px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(ticket.status)}">
+                                ${ticket.status_display}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 text-right space-x-2">
+                            <button onclick="showTicketDetails('${ticket.id}')" class="text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors">
+                                <span class="material-symbols-outlined">visibility</span>
+                            </button>
+                            ${ticket.status === 'valid' ? `
+                                <button onclick="executeCheckin('${ticket.id}')" class="bg-green-600 hover:bg-green-700 text-white p-1.5 rounded-lg transition-colors shadow-sm" title="入場処理">
+                                    <span class="material-symbols-outlined text-sm">check</span>
+                                </button>
+                            ` : ''}
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } else {
+                alert('チケットが見つかりませんでした');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('検索中にエラーが発生しました');
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    function showTicketDetails(ticketId) {
+        const ticket = currentSearchResults.find(t => t.id === ticketId);
+        if (!ticket) return;
+
+        const modal = document.getElementById('ticketDetailModal');
+        const content = document.getElementById('modalContent');
+        
+        // Format guest info
+        let guestInfoHtml = '';
+        if (Object.keys(ticket.guest_info).length > 0) {
+            guestInfoHtml = `
+                <div class="bg-gray-50 dark:bg-gray-900/50 p-5 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">回答フォーム</h4>
+                    <dl class="grid grid-cols-1 gap-3 text-sm">
+                        ${Object.entries(ticket.guest_info).map(([key, value]) => `
+                            <div class="flex justify-between items-center border-b border-gray-200 dark:border-gray-700 pb-2 last:border-0 last:pb-0">
+                                <dt class="text-gray-500 dark:text-gray-400">${key}</dt>
+                                <dd class="font-medium text-gray-900 dark:text-gray-100">${value}</dd>
+                            </div>
+                        `).join('')}
+                    </dl>
+                </div>
+            `;
+        }
+
+        content.innerHTML = `
+            <div class="grid grid-cols-2 gap-6">
+                <div class="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl">
+                    <label class="text-xs text-gray-500 block mb-1">チケットID</label>
+                    <p class="font-mono text-sm font-bold text-gray-900 dark:text-gray-100 break-all">${ticket.id}</p>
+                </div>
+                <div class="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl">
+                    <label class="text-xs text-gray-500 block mb-1">ステータス</label>
+                    <span class="px-2 py-1 rounded text-xs font-bold ${getStatusColor(ticket.status)} inline-block">
+                        ${ticket.status_display}
+                    </span>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-500 block mb-1">入場枠</label>
+                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-1">
+                        <span class="material-symbols-outlined text-sm text-gray-400">event</span>
+                        ${ticket.slot_detail.event_date} ${ticket.slot_detail.start_time}
+                    </p>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-500 block mb-1">属性</label>
+                    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 flex items-center gap-1">
+                        <span class="material-symbols-outlined text-sm text-gray-400">badge</span>
+                        ${ticket.attribute_detail.display_name}
+                    </p>
+                </div>
+            </div>
+            
+            ${guestInfoHtml}
+            
+            <div class="border-t border-gray-200 dark:border-gray-700 pt-5">
+                <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">予約情報</h4>
+                <div class="flex flex-col gap-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">予約ID</span>
+                        <span class="font-mono text-gray-900 dark:text-gray-100">${ticket.reservation_id}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">購入日時</span>
+                        <span class="text-gray-900 dark:text-gray-100">${new Date(ticket.created_at).toLocaleString('ja-JP')}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+
+    function closeModal() {
+        const modal = document.getElementById('ticketDetailModal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+
+    async function executeCheckin(ticketId) {
+        if (!confirm('このチケットを入場済みにしますか？')) return;
+        
+        try {
+            const res = await fetch('/api/admin/manual-checkin', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ ticket_id: ticketId })
+            });
+            
+            const data = await res.json();
+            if (data.success) {
+                // Show success toast or alert
+                const toast = document.createElement('div');
+                toast.className = 'fixed bottom-4 right-4 bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg z-50 flex items-center gap-2 animate-bounce';
+                toast.innerHTML = '<span class="material-symbols-outlined">check_circle</span> 入場処理が完了しました';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 3000);
+
+                searchTicket(); // Refresh list
+                // Ideally refresh stats too, but for now just list
+            } else {
+                alert(data.message || 'エラーが発生しました');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('通信エラーが発生しました');
+        }
+    }
+
+    function getStatusColor(status) {
+        switch(status) {
+            case 'valid': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300';
+            case 'entered': return 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300';
+            case 'cancelled': return 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300';
+            default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+        }
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    function filterVisitors() {
+        const input = document.getElementById('visitorSearch');
+        const filter = input.value.toUpperCase();
+        const table = document.getElementById('visitorTable');
+        const tr = table.getElementsByTagName('tr');
+
+        for (let i = 1; i < tr.length; i++) {
+            let visible = false;
+            const tds = tr[i].getElementsByTagName('td');
+            for (let j = 0; j < tds.length; j++) {
+                const td = tds[j];
+                if (td) {
+                    const txtValue = td.textContent || td.innerText;
+                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                        visible = true;
+                        break;
+                    }
+                }
+            }
+            tr[i].style.display = visible ? '' : 'none';
+        }
+    }
 </script>
 {% endblock %}

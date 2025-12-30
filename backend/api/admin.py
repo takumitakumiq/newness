@@ -3,7 +3,7 @@ MATSU - Django Admin Configuration with Unfold
 """
 from django.contrib import admin
 from unfold.admin import ModelAdmin
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog
+from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
 
 
 @admin.register(EntrySlot)
@@ -83,3 +83,31 @@ class CheckInLogAdmin(ModelAdmin):
     search_fields = ['ticket__id', 'device_id', 'operator']
     ordering = ['-created_at']
     readonly_fields = ['id', 'ticket', 'action', 'success', 'message', 'device_id', 'operator', 'created_at']
+
+
+@admin.register(Announcement)
+class AnnouncementAdmin(ModelAdmin):
+    list_display = ['title', 'priority', 'is_active', 'target_slot', 'created_at']
+    list_filter = ['priority', 'is_active', 'created_at']
+    list_editable = ['is_active']
+    search_fields = ['title', 'content']
+    ordering = ['-created_at']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(TicketTransfer)
+class TicketTransferAdmin(ModelAdmin):
+    list_display = ['ticket', 'from_user', 'to_user', 'status', 'expires_at', 'created_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['ticket__id', 'from_user__username', 'to_user__username', 'transfer_token']
+    ordering = ['-created_at']
+    readonly_fields = ['id', 'transfer_token', 'created_at', 'accepted_at']
+
+
+@admin.register(PromoCode)
+class PromoCodeAdmin(ModelAdmin):
+    list_display = ['code', 'discount_amount', 'is_active', 'valid_from', 'valid_until', 'usage_limit', 'used_count']
+    list_filter = ['is_active', 'valid_from', 'valid_until']
+    search_fields = ['code']
+    ordering = ['-created_at']
+    readonly_fields = ['used_count', 'created_at']
