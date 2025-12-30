@@ -3,6 +3,8 @@
 「MATSU」は洛星文化祭のための入場チケット予約・管理システムです。  
 属性ベースのクォータ管理、動的フォーム、QRコードチェックインをサポートしています。
 
+詳細なドキュメントは [DOCUMENTATION.md](./DOCUMENTATION.md) を参照してください。
+
 ## 🎯 機能
 
 - **チケット予約**: 日時と入場者種別を選んでチケットを予約
@@ -11,43 +13,41 @@
 - **QRコードチェックイン**: 当日のスムーズな入場管理
 - **Apple Wallet風マイページ**: 予約したチケットを一覧表示
 
+## 🚀 クイックスタート
+
+以下のコマンドで開発環境を一発起動できます。
+
+```bash
+chmod +x start_dev_new.sh
+./start_dev_new.sh
+```
+
+- **フロントエンド**: http://localhost:3006
+- **バックエンド**: http://localhost:8005
+- **管理者ログイン**: http://localhost:3006/auth/login (ID: admin / PW: admin)
+
 ## 🛠 技術スタック
 
-### Backend
+### Backend (Port: 8005)
 - Django 5.x + Django REST Framework
-- PostgreSQL (JSONB対応)
+- PostgreSQL (JSONB対応) / SQLite (開発用)
 - django-unfold (モダンな管理画面)
 
-### Frontend
+### Frontend (Port: 3006)
 - Next.js 14 (App Router)
 - TypeScript
 - Tailwind CSS + shadcn/ui
 - Zustand (状態管理)
-- Framer Motion (アニメーション)
 
 ## 📂 プロジェクト構造
 
 ```
 matsu/
 ├── backend/              # Django API
-│   ├── core/             # プロジェクト設定
-│   ├── api/              # APIアプリ
-│   │   ├── models.py     # データモデル
-│   │   ├── views.py      # APIビュー
-│   │   ├── serializers.py
-│   │   └── urls.py
-│   └── manage.py
-│
-└── frontend/             # Next.js フロントエンド
-    ├── app/              # App Router ページ
-    ├── components/       # UIコンポーネント
-    ├── lib/              # ユーティリティ
-    └── store/            # Zustand ストア
+├── frontend-app/         # Next.js フロントエンド (旧 frontend)
+└── start_dev_new.sh      # 開発サーバー起動スクリプト
 ```
 
-## 🚀 セットアップ
-
-### 前提条件
 - Python 3.11+
 - Node.js 18+
 - PostgreSQL 14+ (または開発用にSQLite)
