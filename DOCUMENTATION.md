@@ -1,233 +1,173 @@
-# MATSU プロジェクトドキュメント
+# MATSU システム開発・運用マニュアル
 
-## 1. プロジェクト概要
-「MATSU」は洛星文化祭のための入場チケット予約・管理システムです。
-属性ベースのクォータ管理（保護者、在校生、一般など）、動的フォームによる情報収集、QRコードを用いた当日の入場管理機能を提供します。
+## 1. はじめに（このシステムについて）
+このシステム「MATSU」は、文化祭のチケット予約と入場管理をデジタル化するものです。
+紙のチケットの代わりに、スマホで予約して、QRコードで入場できるようにします。
 
-## 2. システムアーキテクチャ
+**主な機能:**
+*   **予約サイト**: お客さんがスマホからチケットを予約します。
+*   **QRコード**: 予約完了時に発行され、入場の証になります。
+*   **管理画面**: 運営委員が予約状況を見たり、当日の受付（QRスキャン）をしたりします。
+
+## 2. システムの全体像（仕組み）
+このシステムは、大きく分けて「**画面（フロントエンド）**」と「**裏方（バックエンド）**」の2つで動いています。
 
 ```mermaid
 graph TD
-    User[ユーザー (ブラウザ)]
-    Admin[管理者 (ブラウザ)]
+    User["スマホ/PCを使う人<br>(お客さん・生徒)"]
+    Browser["ブラウザ<br>(Chrome/Safariなど)"]
     
-    subgraph Frontend [Frontend (Next.js:3006)]
-        Pages[App Router Pages]
-        Components[UI Components]
-        Store[Zustand Store]
-        API_Client[API Client]
+    subgraph System ["MATSU システム"]
+        Frontend["画面を作るプログラム<br>(Next.js / Port:3006)"]
+        Backend["データ処理をするプログラム<br>(Django / Port:8005)"]
+        Database["データを保存する箱<br>(Database)"]
     end
-    
-    subgraph Backend [Backend (Django:8005)]
-        API_Views[API Views (DRF)]
-        Models[Django Models]
-        Admin_Panel[Admin Panel (Unfold)]
-        Auth[JWT Auth]
-    end
-    
-    subgraph Database [Database]
-        PostgreSQL[(PostgreSQL / SQLite)]
-    end
-    
-    User -->|HTTPS| Pages
-    Admin -->|HTTPS| Admin_Panel
-    Pages --> Components
-    Components --> Store
-    Store --> API_Client
-    API_Client -->|REST API| API_Views
-    API_Views --> Models
-    Models --> PostgreSQL
-    Admin_Panel --> Models
+
+    User -->|"操作する"| Browser
+    Browser -->|"画面を見せて！"| Frontend
+    Frontend -->|"データをちょうだい！"| Backend
+    Backend -->|"保存/検索"| Database
+    Database -->|"結果を返す"| Backend
+    Backend -->|"データを返す"| Frontend
+    Frontend -->|"画面を表示"| Browser
 ```
 
-## 3. データモデル (ER図)
+## 3. データの流れ（予約のしくみ）
 
-```mermaid
-erDiagram
-    User ||--o{ Reservation : "makes"
-    User ||--o{ TicketTransfer : "sends/receives"
-    
-    Reservation ||--|{ Ticket : "contains"
-    
-    Ticket }|--|| EntrySlot : "booked for"
-    Ticket }|--|| AttributeConfig : "type of"
-    Ticket ||--o{ CheckInLog : "has"
-    Ticket ||--o{ TicketTransfer : "transferred via"
-    
-    EntrySlot ||--o{ Announcement : "has specific"
-    
-    EntrySlot {
-        UUID id PK
-        Date event_date
-        Time start_time
-        Time end_time
-        Integer capacity
-        Integer booked_count
-    }
-    
-    AttributeConfig {
-        UUID id PK
-        String target_type "student/parent/general"
-        Integer max_total_limit
-        JSON form_schema
-    }
-    
-    Reservation {
-        String id PK "R-XXXXXXXX"
-        String guest_identifier
-        String user_name
-        String user_email
-        Integer total_tickets
-    }
-    
-    Ticket {
-        UUID id PK "QR Content"
-        JSON guest_info
-        String status "valid/entered/cancelled"
-        DateTime entered_at
-    }
-    
-    CheckInLog {
-        UUID id PK
-        String action
-        Boolean success
-        String device_id
-    }
-
-    TicketTransfer {
-        UUID id PK
-        String transfer_token
-        String status
-        DateTime expires_at
-    }
-```
-
-## 4. ユーザーフロー
-
-### チケット予約フロー
+予約が入ったとき、データはどう動くのかを図にしました。
 
 ```mermaid
 sequenceDiagram
-    actor User as ユーザー
-    participant FE as Frontend
-    participant BE as Backend
-    participant DB as Database
+    participant User as お客さん
+    participant Screen as 画面(スマホ)
+    participant Server as サーバー(裏方)
+    participant DB as データベース
 
-    User->>FE: トップページアクセス
-    FE->>BE: GET /api/slots (入場枠取得)
-    BE->>DB: Query EntrySlot
-    DB-->>BE: Slots Data
-    BE-->>FE: Slots List
+    User->>Screen: 「予約する」ボタンを押す
+    Screen->>Server: 「予約をお願い！」と送信
+    Note right of Screen: 名前やメールアドレスを送る
     
-    User->>FE: 日時・属性選択
-    FE->>BE: GET /api/attributes (属性設定取得)
-    BE-->>FE: Attribute Config (Form Schema)
+    Server->>DB: 「空きはある？」と確認
+    DB-->>Server: 「まだ大丈夫だよ」
     
-    User->>FE: フォーム入力 (動的フォーム)
-    User->>FE: カートに追加
+    Server->>DB: 「じゃあ予約データを保存して！」
+    DB-->>Server: 「保存しました！」
     
-    User->>FE: 予約確定 (Checkout)
-    FE->>BE: POST /api/checkout
-    BE->>DB: Create Reservation & Tickets
-    DB-->>BE: Success
-    BE-->>FE: Reservation ID & Ticket IDs
-    
-    FE->>User: 完了画面 (QRコード表示)
+    Server-->>Screen: 「予約完了！これがQRコードです」
+    Screen-->>User: 完了画面とQRコードを表示
 ```
 
-## 5. 環境構築と実行
+## 4. 開発の始め方（プログラムの動かし方）
 
-### 必要要件
-- Python 3.10+
-- Node.js 18+
-- npm
+パソコンにこのシステムを入れて、動かすまでの手順です。
+「ターミナル（黒い画面）」を使って操作します。
 
-### 起動方法 (推奨)
-プロジェクトルートにある起動スクリプトを使用するのが最も簡単です。
+### 手順1: 準備
+まず、このプログラムを自分のパソコンにコピーします（Git Clone）。
+※ すでにコピー済みの場合はスキップしてください。
+
+### 手順2: 起動する
+一番簡単な方法は、用意されている「起動スクリプト」を使うことです。
+
+1. ターミナルを開きます。
+2. 以下のコマンド（命令）を入力してエンターキーを押します。
 
 ```bash
-# 実行権限の付与（初回のみ）
-chmod +x start_dev_new.sh
-
-# 開発サーバーの起動
 ./start_dev_new.sh
 ```
 
-このスクリプトは以下の処理を自動で行います：
-1. ポート 3006, 8005 の競合プロセスを停止
-2. バックエンドの仮想環境作成・依存関係インストール・マイグレーション・起動
-3. フロントエンドの依存関係インストール・起動
+これだけで、自動的に準備をしてシステムが立ち上がります。
+もし「許可がありません（Permission denied）」のようなエラーが出たら、以下を先に実行してください。
 
-### 手動起動の場合
-
-**バックエンド (Port: 8005)**
 ```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver 8005
+chmod +x start_dev_new.sh
 ```
 
-**フロントエンド (Port: 3006)**
-```bash
-cd frontend-app
-npm install
-npm run dev -- -p 3006
+### 手順3: 画面を開く
+起動に成功したら、ブラウザで以下のURLにアクセスしてください。
+
+*   **予約画面（お客さん用）**: [http://localhost:3006](http://localhost:3006)
+*   **管理画面（運営用）**: [http://localhost:3006/admin/dashboard](http://localhost:3006/admin/dashboard)
+    *   ログインID: `admin`
+    *   パスワード: `admin`
+
+## 5. データ構造（どんなデータを扱っているか）
+
+システムの中で管理しているデータの関係図です。
+
+```mermaid
+erDiagram
+    User["ユーザー(予約者)"]
+    Reservation["予約情報"]
+    Ticket["チケット(QR)"]
+    EntrySlot["入場枠(日時)"]
+
+    User ||--o{ Reservation : "予約する"
+    Reservation ||--|{ Ticket : "枚数分発行"
+    Ticket }|--|| EntrySlot : "この時間の"
+    
+    EntrySlot {
+        string date "日付"
+        string time "時間"
+        int capacity "定員"
+    }
+    
+    Reservation {
+        string name "名前"
+        string email "メール"
+        int count "枚数"
+    }
+    
+    Ticket {
+        string status "有効/使用済"
+        string qr_code "QRデータ"
+    }
 ```
 
-## 6. アクセス情報
+## 6. 困ったときは（トラブルシューティング）
 
-| サービス | URL | 備考 |
-|---|---|---|
-| **トップページ (予約)** | [http://localhost:3006](http://localhost:3006) | 一般ユーザー向け |
-| **管理者ログイン** | [http://localhost:3006/auth/login](http://localhost:3006/auth/login) | ID: `admin` / PW: `admin` |
-| **管理者ダッシュボード** | [http://localhost:3006/admin/dashboard](http://localhost:3006/admin/dashboard) | 統計・QRスキャン |
-| **API ルート** | [http://localhost:8005/api](http://localhost:8005/api) | Swagger/ReDoc (もしあれば) |
-| **Django 管理画面** | [http://localhost:8005/admin](http://localhost:8005/admin) | DB直接操作 |
-
-## 7. ディレクトリ構造
-
-```
-.
-├── backend/                # Django バックエンド
-│   ├── api/                # アプリケーションロジック (Models, Views)
-│   ├── core/               # 設定ファイル (settings.py)
-│   └── manage.py           # 管理コマンド
-├── frontend-app/           # Next.js フロントエンド
-│   ├── app/                # ページコンポーネント (App Router)
-│   ├── components/         # UIパーツ (shadcn/ui)
-│   ├── lib/                # APIクライアント・型定義
-│   └── store/              # 状態管理 (Zustand)
-├── start_dev_new.sh        # 開発サーバー起動スクリプト
-└── DOCUMENTATION.md        # 本ドキュメント
-```
-
-## 8. トラブルシューティング
-
-### サーバーが起動しない / ポートが使われている
-`start_dev_new.sh` を使用すれば自動的に競合プロセスを終了させますが、手動で解決する場合は以下のコマンドを実行してください。
+### Q. 起動コマンドを打っても動かない！
+A. すでに別のプログラムが動いているかもしれません。一度、以下のコマンドで強制終了させてみてください。
 
 ```bash
 lsof -ti:3006,8005 | xargs kill -9
 ```
+（これは「ポート3006と8005を使っているプログラムを強制停止せよ」という命令です）
 
-### フロントエンドのビルドエラー
-`node_modules` の不整合が原因の場合があります。以下を実行して再インストールしてください。
+### Q. 画面が真っ白になる / エラーが出る
+A. プログラムの準備（インストール）がうまくいっていないかもしれません。
+以下のコマンドで、一度リセットしてやり直せます。
 
 ```bash
+# フロントエンド（画面）を作り直す
 cd frontend-app
-rm -rf node_modules package-lock.json
+rm -rf node_modules
 npm install
+cd ..
+
+# もう一度起動する
+./start_dev_new.sh
 ```
 
-### データベースのリセット
-開発データをリセットしたい場合は、`backend/db.sqlite3` を削除してマイグレーションを再実行してください。
+### Q. データを全部消して最初からやりたい
+A. データベースファイルを削除すればリセットされます。
 
 ```bash
 cd backend
 rm db.sqlite3
 python manage.py migrate
-# python manage.py create_sample_data  # (もしコマンドがあれば)
+```
+
+## 7. フォルダ構成（どこに何があるか）
+
+```
+.
+├── backend/                # 裏方のプログラム (Django)
+│   ├── api/                # ここに主な処理が書いてあります
+│   └── db.sqlite3          # データベースファイル（ここにデータが入る）
+├── frontend-app/           # 画面のプログラム (Next.js)
+│   ├── app/                # ページごとのファイル
+│   └── components/         # ボタンやフォームなどの部品
+├── start_dev_new.sh        # 起動するための便利ツール
+└── DOCUMENTATION.md        # この説明書
 ```
