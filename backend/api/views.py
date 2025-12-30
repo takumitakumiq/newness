@@ -1,11 +1,13 @@
 """
 MATSU - API Views
 """
+import logging
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.shortcuts import render
@@ -13,6 +15,7 @@ from django.views import View
 from django.contrib.admin.views.decorators import staff_member_required
 from django.utils.decorators import method_decorator
 from django.http import HttpResponse
+from django.utils.html import escape
 import json
 import csv
 import secrets
@@ -34,6 +37,25 @@ from .serializers import (
     TicketTransferCreateSerializer, TicketTransferAcceptSerializer,
     PromoCodeSerializer
 )
+from .email_notifications import (
+    send_reservation_confirmation,
+    send_ticket_transfer_notification,
+    send_cancellation_notification
+)
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+
+# Rate limiting classes
+class CheckoutRateThrottle(UserRateThrottle):
+    """Rate limit for checkout operations - 5 requests per minute"""
+    rate = '5/min'
+
+
+class CheckInRateThrottle(UserRateThrottle):
+    """Rate limit for check-in operations - 30 requests per minute"""
+    rate = '30/min'
 
 
 class EntrySlotViewSet(viewsets.ReadOnlyModelViewSet):
@@ -128,6 +150,12 @@ class TicketViewSet(viewsets.ReadOnlyModelViewSet):
             EntrySlot.objects.filter(id=slot.id).update(
                 booked_count=models.F('booked_count') - 1
             )
+        
+        # Send cancellation notification email
+        try:
+            send_cancellation_notification(ticket)
+        except Exception as e:
+            logger.warning(f"Failed to send cancellation email: {str(e)}")
 
         return Response({"status": "cancelled", "message": "チケットをキャンセルしました。"})
 
@@ -154,12 +182,17 @@ class CheckoutView(APIView):
     """
     POST /api/checkout/
     Process ticket checkout with atomic transaction and inventory locking.
+    Rate limited to prevent abuse.
     """
+    throttle_classes = [CheckoutRateThrottle]
     
     def post(self, request):
+        logger.info(f"Checkout request received from user: {request.user if request.user.is_authenticated else 'anonymous'}")
+        
         serializer = CheckoutRequestSerializer(data=request.data, context={'request': request})
         
         if not serializer.is_valid():
+            logger.warning(f"Checkout validation failed: {serializer.errors}")
             return Response(
                 {"errors": serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
@@ -167,6 +200,13 @@ class CheckoutView(APIView):
         
         try:
             reservation = serializer.save()
+            logger.info(f"Reservation created successfully: {reservation.id}")
+            
+            # Send confirmation email asynchronously (non-blocking)
+            try:
+                send_reservation_confirmation(reservation)
+            except Exception as e:
+                logger.warning(f"Failed to send confirmation email: {str(e)}")
             
             response_data = {
                 'reservation_id': reservation.id,
@@ -181,6 +221,7 @@ class CheckoutView(APIView):
             )
         
         except Exception as e:
+            logger.error(f"Checkout failed: {str(e)}", exc_info=True)
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
@@ -191,6 +232,7 @@ class CheckInView(APIView):
     """
     POST /api/checkin/
     Process QR code check-in at the gate.
+    Rate limited to prevent abuse.
     
     Status codes:
     - 200: Success - ticket validated and marked as entered
@@ -199,12 +241,14 @@ class CheckInView(APIView):
     - 404: Not found - ticket doesn't exist
     """
     permission_classes = [IsAdminUser]
+    throttle_classes = [CheckInRateThrottle]
     
     @transaction.atomic
     def post(self, request):
         serializer = CheckInRequestSerializer(data=request.data)
         
         if not serializer.is_valid():
+            logger.warning(f"Check-in validation failed: {serializer.errors}")
             return Response(
                 {"success": False, "message": "無効なリクエストです", "errors": serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
@@ -218,6 +262,7 @@ class CheckInView(APIView):
         try:
             ticket = Ticket.objects.select_for_update().get(id=ticket_uuid)
         except Ticket.DoesNotExist:
+            logger.warning(f"Check-in failed: Ticket not found - {ticket_uuid}")
             self._log_checkin(ticket_uuid, 'not_found', False, 'チケットが見つかりません', device_id, operator)
             return Response(
                 {"success": False, "message": "チケットが見つかりません"},
@@ -226,6 +271,7 @@ class CheckInView(APIView):
         
         # Check status
         if ticket.status == Ticket.Status.ENTERED:
+            logger.info(f"Check-in attempt on already entered ticket: {ticket.id}")
             self._log_checkin(ticket, 'already_entered', False, '既に入場済みです', device_id, operator)
             return Response(
                 {
@@ -237,6 +283,7 @@ class CheckInView(APIView):
             )
         
         if ticket.status == Ticket.Status.CANCELLED:
+            logger.warning(f"Check-in attempt on cancelled ticket: {ticket.id}")
             self._log_checkin(ticket, 'cancelled', False, 'このチケットは無効です', device_id, operator)
             return Response(
                 {"success": False, "message": "このチケットは無効です"},
@@ -248,6 +295,7 @@ class CheckInView(APIView):
         ticket.entered_at = timezone.now()
         ticket.save()
         
+        logger.info(f"Check-in successful: {ticket.id}")
         self._log_checkin(ticket, 'checkin', True, '入場成功', device_id, operator)
         
         return Response(
@@ -406,6 +454,8 @@ class AdminDashboardPageView(View):
     管理者用ダッシュボードページ（HTML）
     """
     def get(self, request):
+        logger.info(f"Admin dashboard accessed by {request.user.username}")
+        
         total_reservations = Reservation.objects.count()
         total_tickets = Ticket.objects.count()
         checked_in_count = Ticket.objects.filter(status=Ticket.Status.ENTERED).count()
@@ -444,10 +494,12 @@ class AdminDashboardPageView(View):
         recent_activity = CheckInLog.objects.select_related('ticket__reservation').order_by('-created_at')[:10]
         recent_activity_data = []
         for log in recent_activity:
+            # Sanitize user input to prevent XSS
+            user_name = escape(log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown')
             recent_activity_data.append({
                 'action': log.action,
                 'ticket_id': str(log.ticket.id),
-                'user_name': log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown',
+                'user_name': user_name,
                 'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 'success': log.success
             })
