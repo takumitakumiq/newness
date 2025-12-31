@@ -16,6 +16,7 @@ import type {
   LoginRequest,
   LoginResponse,
   RegisterRequest,
+  PromoCodeValidation,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
@@ -168,6 +169,15 @@ export async function checkout(
     method: "POST",
     body: JSON.stringify(request),
   });
+}
+
+// === Promo Codes ===
+
+export async function validatePromoCode(code: string): Promise<PromoCodeValidation> {
+  return fetchApi<PromoCodeValidation>(
+    `/promocodes/validate_code?code=${encodeURIComponent(code)}`,
+    { auth: false }
+  );
 }
 
 // === Check-in ===

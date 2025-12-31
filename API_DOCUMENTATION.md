@@ -127,6 +127,7 @@ Request:
   "user_name": "山田太郎",
   "user_email": "yamada@example.com",
   "guest_identifier": "yamada@example.com",
+  "promo_code": "WELCOME2024",
   "tickets": [
     {
       "slot_id": "uuid",
@@ -140,21 +141,31 @@ Request:
 }
 ```
 
+**New Field:**
+- `promo_code` (optional): Promotional code for discount
+
 Response (201 Created):
 ```json
 {
   "reservation_id": "R-ABC123DEF456",
   "ticket_ids": ["uuid1", "uuid2"],
   "total_tickets": 2,
+  "discount_amount": 500,
+  "promo_code": "WELCOME2024",
   "created_at": "2024-05-15T10:30:00Z"
 }
 ```
+
+**New Fields in Response:**
+- `discount_amount`: Applied discount amount in yen
+- `promo_code`: Applied promotional code (if any)
 
 Error Response (400 Bad Request):
 ```json
 {
   "errors": {
-    "tickets": ["チケットを1つ以上選択してください。"]
+    "tickets": ["チケットを1つ以上選択してください。"],
+    "promo_code": ["このプロモーションコードの有効期限が切れています。"]
   }
 }
 ```
@@ -422,6 +433,52 @@ Response:
   "status": "accepted",
   "message": "チケットを受け取りました。",
   "ticket_id": "uuid"
+}
+```
+
+### Promo Codes
+
+#### Validate Promo Code
+**GET** `/promocodes/validate_code/?code=XXXX`
+
+Validates a promotional code before checkout.
+
+**Public Endpoint** - No authentication required
+
+Query Parameters:
+- `code` (required): The promotional code to validate
+
+Success Response (200 OK):
+```json
+{
+  "valid": true,
+  "message": "プロモーションコードが適用されました。",
+  "discount_amount": 500,
+  "code": "WELCOME2024"
+}
+```
+
+Error Responses:
+- **404 Not Found**: Invalid promo code
+```json
+{
+  "valid": false,
+  "message": "無効なプロモーションコードです。"
+}
+```
+
+- **400 Bad Request**: Expired or usage limit reached
+```json
+{
+  "valid": false,
+  "message": "このプロモーションコードの有効期限が切れています。"
+}
+```
+
+```json
+{
+  "valid": false,
+  "message": "このプロモーションコードは使用上限に達しています。"
 }
 ```
 

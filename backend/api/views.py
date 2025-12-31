@@ -35,7 +35,7 @@ from .serializers import (
     TicketUpdateSerializer, TicketCancelSerializer,
     AnnouncementSerializer, TicketTransferSerializer,
     TicketTransferCreateSerializer, TicketTransferAcceptSerializer,
-    PromoCodeSerializer
+    PromoCodeSerializer, sanitize_string
 )
 from .email_notifications import (
     send_reservation_confirmation,
@@ -212,6 +212,8 @@ class CheckoutView(APIView):
                 'reservation_id': reservation.id,
                 'ticket_ids': [str(t.id) for t in reservation.tickets.all()],
                 'total_tickets': reservation.total_tickets,
+                'discount_amount': reservation.discount_amount,
+                'promo_code': reservation.promo_code.code if reservation.promo_code else None,
                 'created_at': reservation.created_at
             }
             
@@ -879,6 +881,56 @@ class PromoCodeViewSet(viewsets.ModelViewSet):
     queryset = PromoCode.objects.all()
     serializer_class = PromoCodeSerializer
     permission_classes = [IsAdminUser]
+    
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def validate_code(self, request):
+        """
+        GET /api/promocodes/validate_code/?code=XXX
+        プロモーションコードの検証（公開エンドポイント）
+        """
+        code = sanitize_string(request.query_params.get('code', '')).upper()
+        
+        if not code:
+            return Response(
+                {"valid": False, "message": "プロモーションコードを入力してください。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            promo = PromoCode.objects.get(code=code, is_active=True)
+        except PromoCode.DoesNotExist:
+            return Response(
+                {"valid": False, "message": "無効なプロモーションコードです。"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check validity period
+        now = timezone.now()
+        if promo.valid_from and now < promo.valid_from:
+            return Response(
+                {"valid": False, "message": "このプロモーションコードはまだ有効期間ではありません。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if promo.valid_until and now > promo.valid_until:
+            return Response(
+                {"valid": False, "message": "このプロモーションコードの有効期限が切れています。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check usage limit
+        if promo.usage_limit and promo.used_count >= promo.usage_limit:
+            return Response(
+                {"valid": False, "message": "このプロモーションコードは使用上限に達しています。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Valid promo code
+        return Response({
+            "valid": True,
+            "message": "プロモーションコードが適用されました。",
+            "discount_amount": promo.discount_amount,
+            "code": promo.code
+        })
 
 
 class MyTransfersView(generics.ListAPIView):

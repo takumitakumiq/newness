@@ -154,6 +154,19 @@ class Reservation(models.Model):
         verbose_name="合計チケット数",
         default=0
     )
+    promo_code = models.ForeignKey(
+        'PromoCode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reservations",
+        verbose_name="プロモーションコード"
+    )
+    discount_amount = models.PositiveIntegerField(
+        verbose_name="割引額",
+        default=0,
+        help_text="適用された割引額（円）"
+    )
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name="予約日時"
@@ -415,7 +428,7 @@ class PromoCode(models.Model):
     Discount codes for ticket purchases.
     """
     code = models.CharField(max_length=50, unique=True, verbose_name="コード")
-    discount_amount = models.IntegerField(verbose_name="割引額", help_text="円単位")
+    discount_amount = models.PositiveIntegerField(verbose_name="割引額", help_text="円単位")
     is_active = models.BooleanField(default=True, verbose_name="有効")
     valid_from = models.DateTimeField(null=True, blank=True, verbose_name="有効開始日時")
     valid_until = models.DateTimeField(null=True, blank=True, verbose_name="有効終了日時")

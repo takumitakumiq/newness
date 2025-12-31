@@ -7,7 +7,7 @@ from django.utils import timezone
 from datetime import timedelta, date, time
 from api.models import (
     EntrySlot, AttributeConfig, Reservation, Ticket, 
-    CheckInLog, Announcement, TicketTransfer
+    CheckInLog, Announcement, TicketTransfer, PromoCode
 )
 import uuid
 
@@ -258,3 +258,32 @@ class AnnouncementModelTest(TestCase):
         self.assertEqual(announcement.title, '重要なお知らせ')
         self.assertEqual(announcement.priority, Announcement.Priority.WARNING)
         self.assertTrue(announcement.is_active)
+
+
+class PromoCodeModelTest(TestCase):
+    """Test cases for PromoCode model"""
+    
+    def setUp(self):
+        from api.models import PromoCode
+        self.promo = PromoCode.objects.create(
+            code='TESTCODE',
+            discount_amount=500,
+            is_active=True,
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_until=timezone.now() + timedelta(days=7),
+            usage_limit=10,
+            used_count=0
+        )
+    
+    def test_promo_code_creation(self):
+        """Test promo code creation"""
+        self.assertEqual(self.promo.code, 'TESTCODE')
+        self.assertEqual(self.promo.discount_amount, 500)
+        self.assertTrue(self.promo.is_active)
+    
+    def test_usage_tracking(self):
+        """Test usage count tracking"""
+        self.assertEqual(self.promo.used_count, 0)
+        self.promo.used_count += 1
+        self.promo.save()
+        self.assertEqual(self.promo.used_count, 1)
