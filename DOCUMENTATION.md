@@ -73,14 +73,14 @@ sequenceDiagram
 2. 以下のコマンド（命令）を入力してエンターキーを押します。
 
 ```bash
-./start_dev_new.sh
+./start_system.sh
 ```
 
 これだけで、自動的に準備をしてシステムが立ち上がります。
 もし「許可がありません（Permission denied）」のようなエラーが出たら、以下を先に実行してください。
 
 ```bash
-chmod +x start_dev_new.sh
+chmod +x start_system.sh
 ```
 
 ### 手順3: 画面を開く
@@ -140,13 +140,13 @@ A. プログラムの準備（インストール）がうまくいっていな�
 
 ```bash
 # フロントエンド（画面）を作り直す
-cd frontend-app
+cd frontend
 rm -rf node_modules
 npm install
 cd ..
 
 # もう一度起動する
-./start_dev_new.sh
+./start_system.sh
 ```
 
 ### Q. データを全部消して最初からやりたい
@@ -165,10 +165,10 @@ python manage.py migrate
 ├── backend/                # 裏方のプログラム (Django)
 │   ├── api/                # ここに主な処理が書いてあります
 │   └── db.sqlite3          # データベースファイル（ここにデータが入る）
-├── frontend-app/           # 画面のプログラム (Next.js)
+├── frontend/               # 画面のプログラム (Next.js)
 │   ├── app/                # ページごとのファイル
 │   └── components/         # ボタンやフォームなどの部品
-├── start_dev_new.sh        # 起動するための便利ツール
+├── start_system.sh         # 起動するための便利ツール
 ├── CODE_EXPLANATION.md     # ★コードの詳細解説書（開発者向け）
 └── DOCUMENTATION.md        # この説明書
 ```

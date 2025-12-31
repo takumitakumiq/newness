@@ -1,275 +1,276 @@
-# MATSU - 洛星文化祭チケット予約・管理システム
+# 🎪 MATSU - 洛星文化祭チケット予約・管理システム
 
-![Project Status](https://img.shields.io/badge/status-active-success.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Status](https://img.shields.io/badge/status-active-success.svg)
+![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Tech](https://img.shields.io/badge/tech-Next.js%20%7C%20Django%20%7C%20SQLite-green.svg)
 
-「MATSU」は、洛星文化祭のために開発された、次世代の入場チケット予約・管理プラットフォームです。
-従来の紙チケットやGoogleフォームでの管理から脱却し、**属性別の定員管理**、**動的な情報収集**、そして**QRコードによるスムーズな入場**を実現します。
+## 👋 次期開発者・運用担当者の方へ
+
+このドキュメントは、**「システムの中身を全く知らない人が、今日から開発・運用を完全に引き継げるように」** という目的で書かれています。
+単なる予約システムではなく、**譲渡機能**や**スタッフ間チャット**まで備えた統合プラットフォームです。まずはこの地図（README）で全体像を把握してください。
 
 ---
 
 ## 📚 目次
 
-1. [プロジェクト概要](#-プロジェクト概要)
-2. [主な機能](#-主な機能)
-3. [システムアーキテクチャ](#-システムアーキテクチャ)
-4. [データモデル (ER図)](#-データモデル-er図)
-5. [ユーザーフロー](#-ユーザーフロー)
-6. [環境構築と起動](#-環境構築と起動)
-7. [ディレクトリ構造](#-ディレクトリ構造)
-8. [コード詳細解説](#-コード詳細解説)
-9. [トラブルシューティング](#-トラブルシューティング)
+1. [システム概要（何ができるの？）](#-システム概要何ができるの)
+2. [クイックスタート（まずは動かそう）](#-クイックスタートまずは動かそう)
+3. [システム構成図（アーキテクチャ）](#-システム構成図アーキテクチャ)
+4. [データベース設計（ER図）](#-データベース設計er図)
+5. [重要な機能とデータの流れ](#-重要な機能とデータの流れ)
+    - [1. 予約と排他制御](#1-予約と排他制御)
+    - [2. チケット譲渡機能](#2-チケット譲渡機能)
+6. [ディレクトリ構造](#-ディレクトリ構造)
+7. [運用・メンテナンス](#-運用メンテナンス)
 
 ---
 
-## 🌟 プロジェクト概要
+## 🌟 システム概要（何ができるの？）
 
-このシステムは、文化祭運営における以下の課題を解決するために設計されました。
+**「MATSU」** は、文化祭運営のDX（デジタルトランスフォーメーション）を実現するフルスタックシステムです。
 
-*   **複雑な入場制限**: 「在校生の保護者は〇〇人まで」「一般は〇〇人まで」といった複雑なルールをシステムで自動制御します。
-*   **情報の分散**: 予約データと当日の入場記録を一元管理し、リアルタイムで来場者数を把握できます。
-*   **柔軟なフォーム**: 入場者の属性（中学生、保護者、OBなど）に応じて、入力してもらう項目（学年、クラス、緊急連絡先など）を自由に変更できます。
+### 🎯 3つの主要ターゲットと機能
 
----
-
-## 🚀 主な機能
-
-| 機能 | 概要 |
+| ターゲット | 主な機能 |
 |---|---|
-| **チケット予約** | カレンダー形式で日時を選択し、カートに入れて一括予約できます。 |
-| **属性別クォータ** | 「一般枠」「保護者枠」など、属性ごとに異なる在庫数を設定可能です。 |
-| **動的フォーム** | 管理画面で設定したJSONスキーマに基づき、予約時の入力フォームを自動生成します。 |
-| **QRチェックイン** | 発行されたQRコードをスマホで読み取るだけで、0.5秒で入場受付が完了します。 |
-| **マイページ** | 予約したチケットの確認、QRコードの表示、キャンセルが可能です。 |
-| **管理者ダッシュボード** | リアルタイムの予約数、入場数、売上（模擬店などへの拡張用）をグラフで確認できます。 |
+| **一般来場者** | ✅ **チケット予約**: 属性（一般/保護者）ごとの定員管理<br>✅ **チケット譲渡**: 行けなくなったチケットを友人にLINE等で送付<br>✅ **マイページ**: QRコード表示、予約履歴確認 |
+| **運営スタッフ** | ✅ **QRチェックイン**: スマホカメラで0.5秒入場受付<br>✅ **スタッフチャット**: トランシーバー代わりのリアルタイム連絡<br>✅ **リアルタイム監視**: 現在の入場者数をグラフで確認 |
+| **システム管理者** | ✅ **動的フォーム**: 「中学生には学校名を聞く」等の設定を管理画面で変更<br>✅ **緊急お知らせ**: サイトトップに警告文を表示<br>✅ **システム管理**: DBバックアップ、ログ確認、キャッシュクリア |
 
 ---
 
-## 🏗 システムアーキテクチャ
+## 🚀 クイックスタート（まずは動かそう）
 
-フロントエンドとバックエンドが分離されたモダンな構成です。
+複雑な環境構築は不要です。スクリプト一発で立ち上がります。
 
-```mermaid
-graph TD
-    User["ユーザー (スマホ/PC)"]
-    Admin["管理者 (PC)"]
-    
-    subgraph Frontend ["Frontend (Next.js:3006)"]
-        Pages["App Router Pages"]
-        Components["UI Components (shadcn/ui)"]
-        Store["Zustand Store (カート管理)"]
-        API_Client["API Client (fetch wrapper)"]
-    end
-    
-    subgraph Backend ["Backend (Django:8005)"]
-        API_Views["API Views (DRF)"]
-        Models["Django Models"]
-        Admin_Panel["Admin Panel (Unfold)"]
-        Auth["JWT Auth"]
-    end
-    
-    subgraph Database ["Database"]
-        DB[(SQLite / PostgreSQL)]
-    end
-    
-    User -->|HTTPS| Pages
-    Admin -->|HTTPS| Admin_Panel
-    Pages --> Components
-    Components --> Store
-    Store --> API_Client
-    API_Client -->|REST API| API_Views
-    API_Views --> Models
-    Models --> DB
-    Admin_Panel --> Models
-```
+### 手順
 
----
-
-## 💾 データモデル (ER図)
-
-システムの中核となるデータ構造です。
-
-```mermaid
-erDiagram
-    User ||--o{ Reservation : "予約する"
-    
-    Reservation ||--|{ Ticket : "含む"
-    
-    Ticket }|--|| EntrySlot : "予約枠"
-    Ticket }|--|| AttributeConfig : "属性"
-    Ticket ||--o{ CheckInLog : "入場記録"
-    
-    EntrySlot {
-        UUID id PK
-        Date event_date "開催日"
-        Time start_time "開始時刻"
-        Integer capacity "定員"
-        Integer booked_count "予約済数"
-    }
-    
-    AttributeConfig {
-        UUID id PK
-        String target_type "属性(一般/保護者等)"
-        Integer max_total_limit "購入上限"
-        JSON form_schema "入力フォーム定義"
-    }
-    
-    Reservation {
-        String id PK "予約ID (R-xxxx)"
-        String user_email "メールアドレス"
-        Integer total_tickets "合計枚数"
-    }
-    
-    Ticket {
-        UUID id PK "チケットID (QR)"
-        JSON guest_info "入力情報(名前等)"
-        String status "有効/入場済/キャンセル"
-    }
-```
-
----
-
-## 🔄 ユーザーフロー
-
-ユーザーがサイトにアクセスしてから予約完了までの流れです。
-
-```mermaid
-sequenceDiagram
-    actor User as ユーザー
-    participant FE as フロントエンド
-    participant BE as バックエンド
-    participant DB as データベース
-
-    User->>FE: トップページを開く
-    FE->>BE: 入場枠(Slots)と属性(Attributes)を取得
-    BE->>DB: データ検索
-    DB-->>BE: データ返却
-    BE-->>FE: 画面表示
-    
-    User->>FE: 日時と属性を選択
-    FE->>User: 動的フォームを表示 (名前などを入力)
-    User->>FE: カートに追加
-    
-    User->>FE: 「予約確定」ボタンを押す
-    FE->>BE: POST /api/checkout (予約リクエスト)
-    
-    Note over BE, DB: 排他制御 (在庫ロック)
-    BE->>DB: 在庫確認 & 予約作成
-    DB-->>BE: 成功
-    
-    BE-->>FE: 予約ID & チケット情報を返却
-    FE->>User: 完了画面 (QRコード表示)
-```
-
----
-
-## 💻 環境構築と起動
-
-誰でも簡単に開発環境を立ち上げられるようにスクリプトを用意しています。
-
-### 必要要件
-*   **Node.js**: v18以上
-*   **Python**: v3.10以上
-*   **Git**
-
-### クイックスタート (推奨)
-
-ターミナルで以下のコマンドを実行するだけです。
+1.  **ターミナルを開く**
+2.  **以下のコマンドを実行**
 
 ```bash
-# 1. リポジトリをクローン
-git clone https://github.com/takumitakumiq/newness.git
-cd newness
+# 実行権限を与える（初回のみ）
+chmod +x start_system.sh
 
-# 2. 実行権限を付与 (初回のみ)
-chmod +x start_dev_new.sh
-
-# 3. 起動スクリプトを実行
-./start_dev_new.sh
+# システムを起動する
+./start_system.sh
 ```
 
-このスクリプトは自動的に以下を行います：
-1.  競合するポート(3006, 8005)のプロセスを停止
-2.  Python仮想環境の作成と依存ライブラリのインストール
-3.  データベースのマイグレーション
-4.  Node.js依存ライブラリのインストール
-5.  バックエンドとフロントエンドの同時起動
+これだけで、バックエンド(Django)とフロントエンド(Next.js)が同時に起動します。
 
 ### アクセスURL
 
 | 画面 | URL | ログイン情報 |
 |---|---|---|
-| **予約サイト** | [http://localhost:3006](http://localhost:3006) | - |
-| **管理者ダッシュボード** | [http://localhost:3006/admin/dashboard](http://localhost:3006/admin/dashboard) | ID: `admin` / PW: `admin` |
+| **予約サイト** | [http://localhost:3006](http://localhost:3006) | (ユーザー登録して利用) |
+| **スタッフ画面** | [http://localhost:3006/staff](http://localhost:3006/staff) | (スタッフ権限ユーザー) |
+| **管理者ダッシュボード** | [http://localhost:3006/admin](http://localhost:3006/admin) | ID: `admin` / PW: `admin` |
 | **Django管理画面** | [http://localhost:8005/admin](http://localhost:8005/admin) | ID: `admin` / PW: `admin` |
+
+---
+
+## 🏗 システム構成図（アーキテクチャ）
+
+```mermaid
+graph TD
+    subgraph Client ["クライアント端末"]
+        UserPhone["📱 来場者スマホ<br>(予約/譲渡/QR表示)"]
+        StaffPhone["📱 スタッフスマホ<br>(QR読取/チャット)"]
+        AdminPC["💻 管理者PC<br>(設定/分析)"]
+    end
+
+    subgraph Frontend ["フロントエンド (Next.js:3006)"]
+        Pages["App Router Pages"]
+        Store["Zustand Store<br>(カート/認証状態)"]
+        APIClient["API Client"]
+    end
+
+    subgraph Backend ["バックエンド (Django:8005)"]
+        API["REST API (DRF)"]
+        Auth["JWT認証"]
+        Logic["ビジネスロジック<br>(在庫管理/譲渡処理)"]
+        AdminPanel["管理パネル"]
+    end
+
+    subgraph Database ["データベース"]
+        SQLite[(SQLite3 / PostgreSQL)]
+    end
+
+    UserPhone -->|HTTPS| Pages
+    StaffPhone -->|HTTPS| Pages
+    AdminPC -->|HTTPS| Pages
+    
+    Pages --> APIClient
+    APIClient -->|JSON| API
+    
+    API --> Logic
+    Logic -->|SQL| SQLite
+    AdminPanel --> Logic
+```
+
+---
+
+## 💾 データベース設計（ER図）
+
+システムの中枢となるデータ構造です。**「予約」だけでなく「譲渡」「チャット」「お知らせ」も管理している**点に注目してください。
+
+```mermaid
+erDiagram
+    %% コア機能：予約
+    EntrySlot ||--|{ Ticket : "在庫管理"
+    AttributeConfig ||--|{ Ticket : "属性ルール"
+    Reservation ||--|{ Ticket : "購入単位"
+    User ||--o{ Reservation : "予約者"
+    
+    %% 機能：チケット
+    Ticket {
+        uuid id PK "QRコードの中身"
+        json guest_info "動的フォーム回答"
+        string status "有効/入場済"
+    }
+    
+    %% 機能：譲渡 (Transfer)
+    Ticket ||--o{ TicketTransfer : "譲渡履歴"
+    User ||--o{ TicketTransfer : "送信/受信"
+    TicketTransfer {
+        string token "譲渡用URLトークン"
+        datetime expires_at "有効期限"
+        string status "未受取/受取済"
+    }
+
+    %% 機能：スタッフチャット
+    User ||--o{ ChatMessage : "送信"
+    ChatMessage {
+        string content "メッセージ内容"
+        datetime created_at "送信日時"
+    }
+
+    %% 機能：お知らせ & クーポン
+    EntrySlot ||--o{ Announcement : "枠限定のお知らせ"
+    PromoCode {
+        string code "割引コード"
+        int discount_amount "割引額"
+    }
+```
+
+---
+
+## 🔄 重要な機能とデータの流れ
+
+### 1. 予約と排他制御
+人気チケットの争奪戦でも**「定員オーバー（ダブルブッキング）」を絶対に起こさない**ための仕組みです。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as ユーザー
+    participant API as バックエンド
+    participant DB as データベース
+
+    User->>API: 予約リクエスト (POST /checkout)
+    
+    Note over API, DB: 🔒 トランザクション開始
+    API->>DB: 入場枠の行をロック (select_for_update)
+    DB-->>API: ロック取得OK
+    
+    API->>DB: 現在の予約数を再確認
+    
+    alt 定員内
+        API->>DB: 予約レコード作成
+        API->>DB: 予約数カウントアップ
+        DB-->>API: コミット完了
+        API-->>User: ✅ 予約成功 (QR発行)
+    else 定員オーバー
+        DB-->>API: ロールバック
+        API-->>User: ❌ エラー (満席)
+    end
+    Note over API, DB: 🔓 ロック解除
+```
+
+### 2. チケット譲渡機能
+「行けなくなったから友達にあげる」を実現する機能です。セキュリティのため、**一時的なトークン**を発行しています。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Owner as 譲渡する人
+    actor Friend as 受け取る人
+    participant System as システム
+
+    Owner->>System: 「このチケットを譲る」ボタン
+    System->>System: 譲渡トークン生成 (有効期限付き)
+    System-->>Owner: 譲渡用URLを発行
+    
+    Owner->>Friend: LINE等でURLを送信
+    
+    Friend->>System: URLにアクセス
+    System->>System: トークンの有効性を確認
+    
+    alt 有効
+        System->>System: チケットの所有者をFriendに変更
+        System->>System: トークンを使用済みに更新
+        System-->>Friend: ✅ 受取完了 (QR表示)
+        System-->>Owner: ❌ チケット消滅
+    else 無効/期限切れ
+        System-->>Friend: ❌ エラー
+    end
+```
 
 ---
 
 ## 📂 ディレクトリ構造
 
+開発に必要なファイルはここにあります。
+
 ```
 .
-├── backend/                # Django バックエンド
-│   ├── api/                # アプリケーションロジック (Models, Views)
-│   ├── core/               # プロジェクト設定 (settings.py)
-│   ├── manage.py           # Django管理コマンド
-│   └── requirements.txt    # Python依存ライブラリ
-├── frontend-app/           # Next.js フロントエンド
-│   ├── app/                # ページコンポーネント (App Router)
-│   ├── components/         # UIパーツ (shadcn/ui)
-│   ├── lib/                # APIクライアント・型定義
-│   ├── store/              # 状態管理 (Zustand)
-│   └── package.json        # Node.js依存ライブラリ
-├── start_dev_new.sh        # 開発サーバー一発起動スクリプト
-├── DOCUMENTATION.md        # 簡易ドキュメント
-├── CODE_EXPLANATION.md     # 詳細コード解説書
-└── README.md               # 本ファイル
+├── backend/                # 🐍 バックエンド (Django)
+│   ├── api/                # メインアプリ
+│   │   ├── models.py       # ★DB定義 (一番重要)
+│   │   ├── views.py        # ★ロジック (予約/譲渡/チャット)
+│   │   └── urls.py         # URL設計図
+│   ├── core/               # 設定 (settings.py)
+│   └── db.sqlite3          # データベースファイル
+│
+├── frontend/               # ⚛️ フロントエンド (Next.js)
+│   ├── app/                # 画面ファイル
+│   │   ├── page.tsx        # トップページ
+│   │   ├── staff/          # ★スタッフ用 (QRスキャン/チャット)
+│   │   ├── transfer/       # ★譲渡受取ページ
+│   │   └── admin/          # 管理者ダッシュボード
+│   ├── components/         # UI部品
+│   └── store/              # 状態管理 (Zustand)
+│
+└── start_system.sh         # 🚀 起動スクリプト
 ```
 
 ---
 
-## 📖 コード詳細解説
+## 🛠 運用・メンテナンス
 
-開発者向けに、各ファイルの役割や重要なロジックを解説します。
+### 💬 スタッフチャットの使い方
+スタッフ画面 (`/staff`) にアクセスすると、LINEのようなチャット画面があります。
+トラブル発生時の全体共有や、各ゲート間の連絡に使用してください。
 
-### 1. バックエンド (`backend/`)
+### 📢 緊急お知らせの出し方
+1. [Django管理画面](http://localhost:8005/admin) > **Announcements**
+2. 「ADD ANNOUNCEMENT」
+3. `Priority` を `Critical` にすると、トップページに赤枠で警告が出ます（例：「台風のため中止」など）。
 
-*   **`api/models.py`**: データベースの設計図です。
-    *   `EntrySlot`: 「10:00〜11:00」のような時間枠を定義します。`remaining` プロパティで残席数を計算します。
-    *   `AttributeConfig`: 「保護者」「中学生」などの属性を定義します。`form_schema` フィールドにJSONを入れることで、フロントエンドの入力フォームを自由に変えられます。
-*   **`api/views.py`**: サーバーの処理ロジックです。
-    *   `CheckoutView`: 予約確定処理を行います。`select_for_update()` を使ってデータベースに行ロックをかけ、**ダブルブッキング（定員オーバー）を厳密に防いでいます**。
+### 🎫 プロモーションコードの発行
+1. [Django管理画面](http://localhost:8005/admin) > **Promo codes**
+2. コード（例: `MATSU2025`）と割引額を設定。
+3. ユーザーが予約時に入力すると割引が適用されます。
 
-### 2. フロントエンド (`frontend-app/`)
-
-*   **`store/useCartStore.ts`**: カートの中身を管理します。
-    *   Zustandを使用し、ブラウザを閉じてもカートの中身が消えないようにしています。
-    *   `addItem` 関数内で、属性ごとの購入上限チェックを行っています。
-*   **`components/DynamicForm.tsx`**: 動的フォーム生成コンポーネントです。
-    *   バックエンドから受け取ったJSONスキーマ（例: `{"type": "text", "label": "氏名"}`) を解析し、自動的に `<input>` タグを作ります。
-
----
-
-## ❓ トラブルシューティング
-
-### Q. 起動コマンドを打っても動かない
-A. すでに別のプログラムがポートを使っている可能性があります。以下で強制終了できます。
+### 🆘 トラブルシューティング
+**Q. サーバーが動かない / エラーが出る**
 ```bash
+# プロセスを全停止して再起動
 lsof -ti:3006,8005 | xargs kill -9
+./start_system.sh
 ```
 
-### Q. 画面が真っ白になる / エラーが出る
-A. `node_modules` の不整合が原因の場合があります。リセットしてみてください。
-```bash
-cd frontend-app
-rm -rf node_modules package-lock.json
-npm install
-cd ..
-./start_dev_new.sh
-```
-
-### Q. データベースをリセットしたい
-A. 以下のコマンドで初期状態に戻せます。
+**Q. データを全消去してリセットしたい**
 ```bash
 cd backend
 rm db.sqlite3
@@ -278,4 +279,5 @@ python manage.py migrate
 
 ---
 
-Created by Takumi Yoshida for Rakusei Festival.
+**Good luck! 最高の文化祭にしてください！**
+Created by Takumi Yoshida.

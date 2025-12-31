@@ -96,9 +96,9 @@ APIのリクエストを受け取り、処理を行う部分です。
 
 ## 2. フロントエンド (Next.js)
 
-フロントエンドは `frontend-app/` ディレクトリにあり、Next.js (App Router) を使用しています。
+フロントエンドは `frontend/` ディレクトリにあり、Next.js (App Router) を使用しています。
 
-### 2.1 ページ構成 (`frontend-app/app/`)
+### 2.1 ページ構成 (`frontend/app/`)
 
 #### `page.tsx` (トップページ)
 予約フローのメイン画面です。
@@ -115,7 +115,7 @@ APIのリクエストを受け取り、処理を行う部分です。
 - カート内のチケット一覧を表示。
 - 「予約確定」ボタンでAPIの `/checkout` エンドポイントを叩きます。
 
-### 2.2 状態管理 (`frontend-app/store/`)
+### 2.2 状態管理 (`frontend/store/`)
 
 Zustandライブラリを使用して、アプリ全体の状態を管理しています。
 
@@ -131,7 +131,7 @@ Zustandライブラリを使用して、アプリ全体の状態を管理して�
 - **Persistence**:
     - `persist` ミドルウェアを使用しており、ブラウザを閉じてもカートの中身が保存されます（localStorage）。
 
-### 2.3 APIクライアント (`frontend-app/lib/api.ts`)
+### 2.3 APIクライアント (`frontend/lib/api.ts`)
 
 バックエンドAPIとの通信を一手に引き受けるモジュールです。
 
