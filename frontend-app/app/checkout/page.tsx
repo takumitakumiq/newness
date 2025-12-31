@@ -330,9 +330,12 @@ export default function CheckoutPage() {
                     placeholder="コードを入力"
                     value={promoCode}
                     onChange={(e) => {
-                      setPromoCode(e.target.value.toUpperCase());
+                      setPromoCode(e.target.value);
                       setPromoValidation(null);
                       setPromoError(null);
+                    }}
+                    onBlur={(e) => {
+                      setPromoCode(e.target.value.toUpperCase());
                     }}
                     disabled={isValidatingPromo}
                   />

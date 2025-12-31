@@ -224,6 +224,14 @@ class CheckoutRequestSerializer(serializers.Serializer):
                     code=promo_code_str.upper(),
                     is_active=True
                 )
+                
+                # Double-check validity period with lock
+                now = timezone.now()
+                if promo_code_obj.valid_from and now < promo_code_obj.valid_from:
+                    raise serializers.ValidationError("このプロモーションコードはまだ有効期間ではありません。")
+                if promo_code_obj.valid_until and now > promo_code_obj.valid_until:
+                    raise serializers.ValidationError("このプロモーションコードの有効期限が切れています。")
+                
                 # Double-check usage limit with lock
                 if promo_code_obj.usage_limit and promo_code_obj.used_count >= promo_code_obj.usage_limit:
                     raise serializers.ValidationError("このプロモーションコードは使用上限に達しています。")

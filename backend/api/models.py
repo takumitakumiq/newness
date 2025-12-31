@@ -428,7 +428,7 @@ class PromoCode(models.Model):
     Discount codes for ticket purchases.
     """
     code = models.CharField(max_length=50, unique=True, verbose_name="コード")
-    discount_amount = models.IntegerField(verbose_name="割引額", help_text="円単位")
+    discount_amount = models.PositiveIntegerField(verbose_name="割引額", help_text="円単位")
     is_active = models.BooleanField(default=True, verbose_name="有効")
     valid_from = models.DateTimeField(null=True, blank=True, verbose_name="有効開始日時")
     valid_until = models.DateTimeField(null=True, blank=True, verbose_name="有効終了日時")

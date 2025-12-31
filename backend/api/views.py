@@ -35,7 +35,7 @@ from .serializers import (
     TicketUpdateSerializer, TicketCancelSerializer,
     AnnouncementSerializer, TicketTransferSerializer,
     TicketTransferCreateSerializer, TicketTransferAcceptSerializer,
-    PromoCodeSerializer
+    PromoCodeSerializer, sanitize_string
 )
 from .email_notifications import (
     send_reservation_confirmation,
@@ -888,7 +888,7 @@ class PromoCodeViewSet(viewsets.ModelViewSet):
         GET /api/promocodes/validate_code/?code=XXX
         プロモーションコードの検証（公開エンドポイント）
         """
-        code = request.query_params.get('code', '').upper().strip()
+        code = sanitize_string(request.query_params.get('code', '')).upper().strip()
         
         if not code:
             return Response(
