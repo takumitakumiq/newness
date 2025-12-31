@@ -22,7 +22,8 @@ from django.db import transaction, models
 from django.db.models import Count, Sum
 from django.contrib.auth.models import User
 
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
+from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage, ChatMessageRead
+from .permissions import IsStaffUser, ChatThrottle, CheckInThrottle
 from .serializers import (
     EntrySlotSerializer, AttributeConfigSerializer,
     ReservationSerializer, ReservationListSerializer, TicketSerializer,
@@ -32,7 +33,7 @@ from .serializers import (
     TicketUpdateSerializer, TicketCancelSerializer,
     AnnouncementSerializer, TicketTransferSerializer,
     TicketTransferCreateSerializer, TicketTransferAcceptSerializer,
-    PromoCodeSerializer
+    PromoCodeSerializer, ChatMessageSerializer, ChatReadStatusSerializer
 )
 
 
@@ -198,7 +199,8 @@ class CheckInView(APIView):
     - 410: Gone - ticket is cancelled/invalid
     - 404: Not found - ticket doesn't exist
     """
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsStaffUser]
+    throttle_classes = [CheckInThrottle]  # 60/minute
     
     @transaction.atomic
     def post(self, request):
@@ -534,9 +536,9 @@ class AdminCSVExportView(View):
 class ManualCheckInView(APIView):
     """
     POST /api/admin/manual-checkin/
-    管理者による手動チェックイン（名前・メール検索）
+    管理者/スタッフによる手動チェックイン（名前・メール検索）
     """
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsStaffUser]  # カスタム権限クラスを使用
     
     def get(self, request):
         """検索機能"""
@@ -799,3 +801,71 @@ class MyTransfersView(generics.ListAPIView):
         return TicketTransfer.objects.filter(
             models.Q(from_user=self.request.user) | models.Q(to_user=self.request.user)
         ).select_related('ticket', 'from_user', 'to_user')
+
+
+class ChatMessageViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for staff chat messages.
+    GET /api/chat/ - 最新50件のメッセージ取得 + 未読数
+    POST /api/chat/ - 新規メッセージ送信（レート制限あり）
+    """
+    serializer_class = ChatMessageSerializer
+    permission_classes = [IsStaffUser]
+    
+    def get_throttles(self):
+        # POSTリクエストのみレート制限を適用
+        if self.action == 'create':
+            return [ChatThrottle()]
+        return []
+    
+    def get_queryset(self):
+        # 最新50件を取得（新しい順）
+        return ChatMessage.objects.order_by('-created_at')[:50]
+    
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        
+        # 未読数を計算
+        unread_count = 0
+        last_read_at = None
+        try:
+            read_status = ChatMessageRead.objects.get(user=request.user)
+            last_read_at = read_status.last_read_at
+            unread_count = ChatMessage.objects.filter(
+                created_at__gt=read_status.last_read_at
+            ).exclude(sender=request.user).count()
+        except ChatMessageRead.DoesNotExist:
+            # 未読状態がない場合、自分以外の全メッセージが未読
+            unread_count = ChatMessage.objects.exclude(sender=request.user).count()
+        
+        return Response({
+            'messages': serializer.data,
+            'unread_count': unread_count,
+            'last_read_at': last_read_at,
+        })
+    
+    def perform_create(self, serializer):
+        serializer.save(sender=self.request.user)
+    
+    @action(detail=False, methods=['post'])
+    def mark_read(self, request):
+        """既読にする"""
+        ChatMessageRead.objects.update_or_create(
+            user=request.user,
+            defaults={'last_read_at': timezone.now()}
+        )
+        return Response({'status': 'ok', 'message': '既読にしました'})
+    
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        """未読数のみを取得"""
+        try:
+            read_status = ChatMessageRead.objects.get(user=request.user)
+            count = ChatMessage.objects.filter(
+                created_at__gt=read_status.last_read_at
+            ).exclude(sender=request.user).count()
+        except ChatMessageRead.DoesNotExist:
+            count = ChatMessage.objects.exclude(sender=request.user).count()
+        
+        return Response({'unread_count': count})

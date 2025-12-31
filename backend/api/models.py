@@ -430,3 +430,58 @@ class PromoCode(models.Model):
 
     def __str__(self):
         return f"{self.code} (-{self.discount_amount}円)"
+
+
+class ChatMessage(models.Model):
+    """
+    Staff chat messages for internal communication.
+    スタッフ間のリアルタイムチャット用メッセージ
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sender = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='chat_messages',
+        verbose_name="送信者"
+    )
+    content = models.TextField(
+        verbose_name="メッセージ内容",
+        max_length=500,  # 長さ制限を追加
+        help_text="最大500文字"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="送信日時")
+
+    class Meta:
+        db_table = "api_chatmessage"
+        ordering = ['-created_at']
+        verbose_name = "チャットメッセージ"
+        verbose_name_plural = "チャットメッセージ"
+
+    def __str__(self):
+        return f"{self.sender.username}: {self.content[:30]}"
+
+
+class ChatMessageRead(models.Model):
+    """
+    既読管理: ユーザーごとの最終既読位置を記録
+    """
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name='chat_read_status',
+        verbose_name="ユーザー"
+    )
+    last_read_at = models.DateTimeField(
+        verbose_name="最終既読日時",
+        help_text="この日時より前のメッセージは既読とみなす"
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新日時")
+
+    class Meta:
+        db_table = "api_chatmessageread"
+        verbose_name = "チャット既読状態"
+        verbose_name_plural = "チャット既読状態"
+
+    def __str__(self):
+        return f"{self.user.username}: {self.last_read_at}"

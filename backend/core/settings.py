@@ -130,6 +130,15 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
+    # レート制限設定
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '100/minute',           # 一般的なAPI: 1分に100回
+        'chat': '20/minute',            # チャット送信: 1分に20回
+        'checkin': '60/minute',         # チェックイン: 1分に60回
+    },
 }
 
 # JWT Settings

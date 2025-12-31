@@ -7,7 +7,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
+from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage, ChatMessageRead
 
 
 class EntrySlotSerializer(serializers.ModelSerializer):
@@ -248,8 +248,8 @@ class UserSerializer(serializers.ModelSerializer):
     """ユーザー情報シリアライザー"""
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'date_joined')
-        read_only_fields = ('id', 'username', 'date_joined')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'date_joined', 'is_staff')
+        read_only_fields = ('id', 'username', 'date_joined', 'is_staff')
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -384,3 +384,20 @@ class PromoCodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = PromoCode
         fields = '__all__'
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    """スタッフチャットメッセージ用シリアライザー"""
+    sender_name = serializers.CharField(source='sender.username', read_only=True)
+    
+    class Meta:
+        model = ChatMessage
+        fields = ['id', 'sender', 'sender_name', 'content', 'created_at']
+        read_only_fields = ['id', 'sender', 'sender_name', 'created_at']
+
+
+class ChatReadStatusSerializer(serializers.Serializer):
+    """チャット既読状態レスポンス用"""
+    unread_count = serializers.IntegerField()
+    last_read_at = serializers.DateTimeField(allow_null=True)
+    total_messages = serializers.IntegerField()

@@ -17,6 +17,7 @@ router.register(r'reservations', views.ReservationViewSet, basename='reservation
 router.register(r'tickets', views.TicketViewSet, basename='tickets')
 router.register(r'announcements', views.AnnouncementViewSet, basename='announcements')
 router.register(r'promocodes', views.PromoCodeViewSet, basename='promocodes')
+router.register(r'chat', views.ChatMessageViewSet, basename='chat')
 
 urlpatterns = [
     path('', include(router.urls)),
