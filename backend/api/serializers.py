@@ -248,8 +248,8 @@ class UserSerializer(serializers.ModelSerializer):
     """ユーザー情報シリアライザー"""
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'date_joined', 'is_staff')
-        read_only_fields = ('id', 'username', 'date_joined', 'is_staff')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'date_joined', 'is_staff', 'is_superuser')
+        read_only_fields = ('id', 'username', 'date_joined', 'is_staff', 'is_superuser')
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -263,9 +263,11 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
 
 class TicketUpdateSerializer(serializers.ModelSerializer):
     """チケット情報の修正用"""
+    attribute_id = serializers.UUIDField(required=False, write_only=True)
+    
     class Meta:
         model = Ticket
-        fields = ['guest_info']
+        fields = ['guest_info', 'attribute_id']
 
     def validate(self, attrs):
         ticket = self.instance
@@ -274,7 +276,29 @@ class TicketUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("このチケットは情報の修正が許可されていません。")
         if ticket.status != Ticket.Status.VALID:
             raise serializers.ValidationError("有効なチケットのみ修正できます。")
+        
+        # 名前フィールドが必須
+        guest_info = attrs.get('guest_info', {})
+        if not guest_info.get('name') or str(guest_info.get('name', '')).strip() == '':
+            raise serializers.ValidationError({"guest_info": "お名前は必須です。"})
+        
+        # attribute_idが指定された場合、存在確認
+        if 'attribute_id' in attrs:
+            try:
+                new_attr = AttributeConfig.objects.get(id=attrs['attribute_id'], is_active=True)
+                attrs['_new_attribute'] = new_attr
+            except AttributeConfig.DoesNotExist:
+                raise serializers.ValidationError({"attribute_id": "指定されたチケット種別は存在しません。"})
+        
         return attrs
+
+    def update(self, instance, validated_data):
+        # attribute_idの処理
+        if '_new_attribute' in validated_data:
+            instance.attribute = validated_data.pop('_new_attribute')
+        validated_data.pop('attribute_id', None)
+        
+        return super().update(instance, validated_data)
 
 
 class TicketCancelSerializer(serializers.Serializer):

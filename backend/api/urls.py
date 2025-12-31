@@ -17,7 +17,6 @@ router.register(r'reservations', views.ReservationViewSet, basename='reservation
 router.register(r'tickets', views.TicketViewSet, basename='tickets')
 router.register(r'announcements', views.AnnouncementViewSet, basename='announcements')
 router.register(r'promocodes', views.PromoCodeViewSet, basename='promocodes')
-router.register(r'chat', views.ChatMessageViewSet, basename='chat')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -43,4 +42,16 @@ urlpatterns = [
     # Ticket Transfer endpoints
     path('transfers/create', views.TicketTransferCreateView.as_view(), name='transfer_create'),
     path('transfers/accept', views.TicketTransferAcceptView.as_view(), name='transfer_accept'),
+    
+    # Chat endpoints
+    path('chat/messages', views.ChatMessageView.as_view(), name='chat_messages'),
+    
+    # System Administration endpoints
+    path('admin/system/health', views.SystemHealthView.as_view(), name='system_health'),
+    path('admin/system/backup', views.DatabaseBackupView.as_view(), name='database_backup'),
+    path('admin/system/logs', views.SystemLogsView.as_view(), name='system_logs'),
+    path('admin/system/cleanup', views.DataCleanupView.as_view(), name='data_cleanup'),
+    path('admin/system/cache', views.CacheManagementView.as_view(), name='cache_management'),
+    path('admin/system/users', views.UserManagementView.as_view(), name='user_management'),
+    path('admin/system/export', views.DataExportView.as_view(), name='data_export'),
 ]
