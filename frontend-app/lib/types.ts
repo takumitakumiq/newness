@@ -60,6 +60,9 @@ export interface Reservation {
   user_name: string;
   user_email: string;
   total_tickets: number;
+  promo_code?: string;
+  promo_code_name?: string;
+  discount_amount?: number;
   created_at: string;
   updated_at: string;
   tickets: Ticket[];
@@ -87,13 +90,23 @@ export interface CheckoutRequest {
   user_name?: string;
   user_email?: string;
   tickets: TicketRequest[];
+  promo_code?: string;
 }
 
 export interface CheckoutResponse {
   reservation_id: string;
   ticket_ids: string[];
   total_tickets: number;
+  discount_amount?: number;
+  promo_code?: string;
   created_at: string;
+}
+
+export interface PromoCodeValidation {
+  valid: boolean;
+  message: string;
+  discount_amount?: number;
+  code?: string;
 }
 
 export interface CheckInRequest {

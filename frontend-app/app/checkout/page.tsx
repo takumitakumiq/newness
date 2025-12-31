@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, CreditCard, Loader2, CheckCircle, Ticket } from "lucide-react";
+import { ArrowLeft, CreditCard, Loader2, CheckCircle, Ticket, Tag, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,10 +13,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DynamicForm } from "@/components/DynamicForm";
 import { useCartStore } from "@/store/useCartStore";
 import { useAuthStore } from "@/store/useAuthStore";
-import { checkout } from "@/lib/api";
+import { checkout, validatePromoCode } from "@/lib/api";
 import { userInfoSchema, type UserInfo } from "@/lib/schemas";
 import { formatDate, formatTime } from "@/lib/utils";
-import type { CheckoutRequest, CheckoutResponse } from "@/lib/types";
+import type { CheckoutRequest, CheckoutResponse, PromoCodeValidation } from "@/lib/types";
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -25,6 +25,12 @@ export default function CheckoutPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<CheckoutResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Promo code state
+  const [promoCode, setPromoCode] = useState("");
+  const [promoValidation, setPromoValidation] = useState<PromoCodeValidation | null>(null);
+  const [isValidatingPromo, setIsValidatingPromo] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
   
   const { items, setUserInfo, clearCart, totalCount, updateGuestInfo } = useCartStore();
   const count = totalCount();
@@ -52,6 +58,31 @@ export default function CheckoutPage() {
       user_email: user?.email || "",
     },
   });
+
+  // Handle promo code validation
+  const handlePromoValidation = async () => {
+    if (!promoCode.trim()) {
+      setPromoError("プロモーションコードを入力してください");
+      return;
+    }
+
+    setIsValidatingPromo(true);
+    setPromoError(null);
+    setPromoValidation(null);
+
+    try {
+      const validation = await validatePromoCode(promoCode.trim());
+      setPromoValidation(validation);
+      if (!validation.valid) {
+        setPromoError(validation.message);
+      }
+    } catch (err: any) {
+      setPromoError(err.message || "プロモーションコードの検証に失敗しました");
+      setPromoValidation({ valid: false, message: err.message });
+    } finally {
+      setIsValidatingPromo(false);
+    }
+  };
 
   const onSubmit = async (data: UserInfo) => {
     if (items.length === 0) {
@@ -86,6 +117,7 @@ export default function CheckoutPage() {
           attribute_id: item.attribute.id,
           guest_info: item.guest_info,
         })),
+        promo_code: promoValidation?.valid ? promoCode.trim() : undefined,
       };
 
       const response = await checkout(request);
@@ -123,6 +155,11 @@ export default function CheckoutPage() {
                 <p className="text-muted-foreground">
                   {result.total_tickets}枚のチケットが予約されました
                 </p>
+                {result.discount_amount && result.discount_amount > 0 && (
+                  <p className="text-green-400 font-medium">
+                    {result.discount_amount}円の割引が適用されました
+                  </p>
+                )}
               </div>
 
               <div className="p-4 rounded-lg bg-muted/50 text-left">
@@ -279,6 +316,70 @@ export default function CheckoutPage() {
                 {errors.user_email && (
                   <p className="text-xs text-destructive">{errors.user_email.message}</p>
                 )}
+              </div>
+
+              {/* Promo Code Section */}
+              <div className="space-y-3 pt-2">
+                <Label htmlFor="promo_code" className="flex items-center gap-2">
+                  <Tag className="h-4 w-4" />
+                  プロモーションコード（任意）
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="promo_code"
+                    placeholder="コードを入力"
+                    value={promoCode}
+                    onChange={(e) => {
+                      setPromoCode(e.target.value.toUpperCase());
+                      setPromoValidation(null);
+                      setPromoError(null);
+                    }}
+                    disabled={isValidatingPromo}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handlePromoValidation}
+                    disabled={isValidatingPromo || !promoCode.trim()}
+                  >
+                    {isValidatingPromo ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      "適用"
+                    )}
+                  </Button>
+                </div>
+                
+                <AnimatePresence>
+                  {promoValidation && promoValidation.valid && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-green-400"
+                    >
+                      <Check className="h-4 w-4 flex-shrink-0" />
+                      <div className="flex-1 text-sm">
+                        <p className="font-medium">{promoValidation.message}</p>
+                        <p className="text-xs mt-1">
+                          {promoValidation.discount_amount}円の割引が適用されます
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                  
+                  {promoError && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive"
+                    >
+                      <X className="h-4 w-4 flex-shrink-0" />
+                      <p className="text-sm">{promoError}</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               <Button
