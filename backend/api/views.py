@@ -888,7 +888,7 @@ class PromoCodeViewSet(viewsets.ModelViewSet):
         GET /api/promocodes/validate_code/?code=XXX
         プロモーションコードの検証（公開エンドポイント）
         """
-        code = sanitize_string(request.query_params.get('code', '')).upper().strip()
+        code = sanitize_string(request.query_params.get('code', '')).upper()
         
         if not code:
             return Response(

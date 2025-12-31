@@ -237,9 +237,10 @@ class CheckoutRequestSerializer(serializers.Serializer):
                     raise serializers.ValidationError("このプロモーションコードは使用上限に達しています。")
                 
                 discount_amount = promo_code_obj.discount_amount
-                # Increment usage counter
-                promo_code_obj.used_count += 1
-                promo_code_obj.save()
+                # Increment usage counter atomically using F() expression
+                PromoCode.objects.filter(id=promo_code_obj.id).update(used_count=models.F('used_count') + 1)
+                # Refresh to get the updated count
+                promo_code_obj.refresh_from_db()
             except PromoCode.DoesNotExist:
                 raise serializers.ValidationError("無効なプロモーションコードです。")
         
