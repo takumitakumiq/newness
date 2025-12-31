@@ -78,14 +78,16 @@ class TicketSerializer(serializers.ModelSerializer):
 class ReservationSerializer(serializers.ModelSerializer):
     """Serializer for reservations with nested tickets."""
     tickets = TicketSerializer(many=True, read_only=True)
+    promo_code_name = serializers.CharField(source='promo_code.code', read_only=True)
     
     class Meta:
         model = Reservation
         fields = [
             'id', 'guest_identifier', 'user_name', 'user_email',
-            'total_tickets', 'created_at', 'updated_at', 'tickets'
+            'total_tickets', 'promo_code', 'promo_code_name', 
+            'discount_amount', 'created_at', 'updated_at', 'tickets'
         ]
-        read_only_fields = ['id', 'total_tickets', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'total_tickets', 'discount_amount', 'created_at', 'updated_at']
 
 
 class ReservationListSerializer(serializers.ModelSerializer):
@@ -114,6 +116,7 @@ class CheckoutRequestSerializer(serializers.Serializer):
     user_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     user_email = serializers.EmailField(required=False, allow_blank=True)
     tickets = TicketRequestSerializer(many=True)
+    promo_code = serializers.CharField(max_length=50, required=False, allow_blank=True)
     
     def validate_user_name(self, value):
         """Sanitize user name to prevent XSS"""
@@ -134,6 +137,31 @@ class CheckoutRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("チケットを1つ以上選択してください。")
         if len(value) > MAX_TICKETS_PER_CHECKOUT:  # Limit to prevent abuse
             raise serializers.ValidationError(f"一度に予約できるチケットは{MAX_TICKETS_PER_CHECKOUT}枚までです。")
+        return value
+    
+    def validate_promo_code(self, value):
+        """Validate promo code"""
+        if not value:
+            return value
+        
+        value = sanitize_string(value.upper())
+        
+        try:
+            promo = PromoCode.objects.get(code=value, is_active=True)
+        except PromoCode.DoesNotExist:
+            raise serializers.ValidationError("無効なプロモーションコードです。")
+        
+        # Check validity period
+        now = timezone.now()
+        if promo.valid_from and now < promo.valid_from:
+            raise serializers.ValidationError("このプロモーションコードはまだ有効期間ではありません。")
+        if promo.valid_until and now > promo.valid_until:
+            raise serializers.ValidationError("このプロモーションコードの有効期限が切れています。")
+        
+        # Check usage limit
+        if promo.usage_limit and promo.used_count >= promo.usage_limit:
+            raise serializers.ValidationError("このプロモーションコードは使用上限に達しています。")
+        
         return value
     
     def validate(self, data):
@@ -185,6 +213,27 @@ class CheckoutRequestSerializer(serializers.Serializer):
         Uses SELECT FOR UPDATE to prevent overselling.
         """
         tickets_data = validated_data.pop('tickets')
+        promo_code_str = validated_data.pop('promo_code', None)
+        
+        # Handle promo code
+        promo_code_obj = None
+        discount_amount = 0
+        if promo_code_str:
+            try:
+                promo_code_obj = PromoCode.objects.select_for_update().get(
+                    code=promo_code_str.upper(),
+                    is_active=True
+                )
+                # Double-check usage limit with lock
+                if promo_code_obj.usage_limit and promo_code_obj.used_count >= promo_code_obj.usage_limit:
+                    raise serializers.ValidationError("このプロモーションコードは使用上限に達しています。")
+                
+                discount_amount = promo_code_obj.discount_amount
+                # Increment usage counter
+                promo_code_obj.used_count += 1
+                promo_code_obj.save()
+            except PromoCode.DoesNotExist:
+                raise serializers.ValidationError("無効なプロモーションコードです。")
         
         # Group by slot for locking
         slot_counts = {}
@@ -210,7 +259,9 @@ class CheckoutRequestSerializer(serializers.Serializer):
             guest_identifier=validated_data.get('guest_identifier', ''),
             user_name=validated_data.get('user_name', ''),
             user_email=validated_data.get('user_email', ''),
-            total_tickets=len(tickets_data)
+            total_tickets=len(tickets_data),
+            promo_code=promo_code_obj,
+            discount_amount=discount_amount
         )
         
         # Create tickets
@@ -232,6 +283,8 @@ class CheckoutResponseSerializer(serializers.Serializer):
     reservation_id = serializers.CharField()
     ticket_ids = serializers.ListField(child=serializers.UUIDField())
     total_tickets = serializers.IntegerField()
+    discount_amount = serializers.IntegerField(required=False)
+    promo_code = serializers.CharField(required=False)
     created_at = serializers.DateTimeField()
 
 
