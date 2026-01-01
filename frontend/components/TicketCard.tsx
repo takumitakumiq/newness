@@ -92,13 +92,13 @@ export function TicketCard({ ticket, compact = false }: TicketCardProps) {
               {!compact && (
                 <div className="pt-2">
                   {isValid && (
-                    <div className="flex items-center gap-2 text-green-400">
+                    <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
                       <CheckCircle className="h-5 w-5" />
                       <span className="text-sm font-medium">入場可能</span>
                     </div>
                   )}
                   {isEntered && (
-                    <div className="flex items-center gap-2 text-blue-400">
+                    <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
                       <CheckCircle className="h-5 w-5" />
                       <span className="text-sm font-medium">
                         入場済み ({ticket.entered_at && new Date(ticket.entered_at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })})
@@ -106,7 +106,7 @@ export function TicketCard({ ticket, compact = false }: TicketCardProps) {
                     </div>
                   )}
                   {ticket.status === "cancelled" && (
-                    <div className="flex items-center gap-2 text-red-400">
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
                       <XCircle className="h-5 w-5" />
                       <span className="text-sm font-medium">キャンセル済み</span>
                     </div>

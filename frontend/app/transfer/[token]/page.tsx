@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { Gift, Loader2, CheckCircle, AlertCircle, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { MaintenanceCheck } from "@/components/MaintenanceCheck";
 import { useAuthStore } from "@/store/useAuthStore";
 import { acceptTicketTransfer } from "@/lib/api";
 
@@ -48,6 +49,7 @@ export default function TransferAcceptPage() {
   }
 
   return (
+    <MaintenanceCheck>
     <div className="min-h-screen flex items-center justify-center p-4">
       <Card className="glass max-w-md w-full">
         <CardHeader className="text-center">
@@ -127,5 +129,6 @@ export default function TransferAcceptPage() {
         </CardContent>
       </Card>
     </div>
+    </MaintenanceCheck>
   );
 }

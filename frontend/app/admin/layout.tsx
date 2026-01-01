@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { 
   LayoutDashboard, 
   Users, 
-  Settings, 
   LogOut, 
   Menu, 
   X, 
@@ -85,7 +84,6 @@ export default function AdminLayout({
     { href: "/admin/statistics", label: "統計", icon: BarChart3 },
     { href: "/admin/announcements", label: "お知らせ", icon: MessageSquare },
     { href: "/admin/system", label: "システム管理", icon: Wrench },
-    { href: "/admin/settings", label: "設定", icon: Settings },
   ];
 
   return (

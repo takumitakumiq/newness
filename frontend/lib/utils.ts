@@ -131,6 +131,15 @@ export function getApiErrorMessage(error: unknown, defaultMessage = "エラー�
     }
   }
   
+  // DRF field-level validation errors: {field_name: ["..."]}
+  // Check if any key has an array of strings as value
+  for (const key of Object.keys(e)) {
+    const value = e[key];
+    if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
+      return value[0];
+    }
+  }
+  
   // DRF detail: {detail: "..."}
   if (e.detail && typeof e.detail === 'string') {
     return e.detail;

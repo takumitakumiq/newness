@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuthStore } from "@/store/useAuthStore";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, QrCode, MessageSquare, LogOut, Menu, X } from "lucide-react";
+import { LayoutDashboard, QrCode, MessageSquare, LogOut, Menu, X, UserSearch } from "lucide-react";
 
 export default function StaffLayout({
   children,
@@ -65,6 +65,7 @@ export default function StaffLayout({
   const navItems = [
     { href: "/staff", label: "ホーム", icon: LayoutDashboard },
     { href: "/staff/scan", label: "入場受付", icon: QrCode },
+    { href: "/staff/manual", label: "手動チェックイン", icon: UserSearch },
     { href: "/staff/chat", label: "チャット", icon: MessageSquare },
   ];
 

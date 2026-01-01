@@ -9,6 +9,7 @@ import { TimeSlotPicker } from "@/components/TimeSlotPicker";
 import { AttributeSelector } from "@/components/AttributeSelector";
 import { SmartCart } from "@/components/SmartCart";
 import { AuthForm } from "@/components/AuthForm";
+import { MaintenanceCheck } from "@/components/MaintenanceCheck";
 import { useCartStore } from "@/store/useCartStore";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useThemeStore } from "@/store/useThemeStore";
@@ -149,6 +150,7 @@ export default function HomePage() {
   }
 
   return (
+    <MaintenanceCheck>
     <div className="min-h-screen pb-24">
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b">
@@ -295,5 +297,6 @@ export default function HomePage() {
       {/* Smart Cart */}
       <SmartCart onCheckout={handleCheckout} />
     </div>
+    </MaintenanceCheck>
   );
 }

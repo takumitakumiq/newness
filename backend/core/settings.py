@@ -16,6 +16,9 @@ DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 INSTALLED_APPS = [
+    # Daphne ASGI server (must be first for runserver override)
+    'daphne',
+    
     # Unfold admin (must be before django.contrib.admin)
     'unfold',
     'unfold.contrib.filters',
@@ -34,6 +37,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'channels',
     
     # Local apps
     'api',
@@ -69,6 +73,20 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'core.wsgi.application'
+ASGI_APPLICATION = 'core.asgi.application'
+
+# Channels layer configuration
+# Use in-memory for development, Redis for production
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer'
+    } if DEBUG else {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [(os.getenv('REDIS_HOST', 'localhost'), int(os.getenv('REDIS_PORT', 6379)))],
+        },
+    }
+}
 
 # Database - PostgreSQL
 DATABASES = {
@@ -111,7 +129,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # CORS settings
 CORS_ALLOWED_ORIGINS = os.getenv(
     'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:3000'
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3006,http://127.0.0.1:3006'
 ).split(',')
 CORS_ALLOW_CREDENTIALS = True
 

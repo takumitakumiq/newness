@@ -22,7 +22,7 @@ from django.db import transaction, models
 from django.db.models import Count, Sum
 from django.contrib.auth.models import User
 
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage
+from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage, SystemSetting, ChatMessageRead
 from .serializers import (
     EntrySlotSerializer, AttributeConfigSerializer,
     ReservationSerializer, ReservationListSerializer, TicketSerializer,
@@ -241,7 +241,8 @@ class CheckInView(APIView):
         
         ticket_uuid = serializer.validated_data['ticket_uuid']
         device_id = serializer.validated_data.get('device_id', '')
-        operator = serializer.validated_data.get('operator', '')
+        # 🔒 セキュリティ修正: operatorは常にログインユーザーから取得（偽装防止）
+        operator = request.user.username
         
         # Find ticket
         try:
@@ -299,6 +300,189 @@ class CheckInView(APIView):
                 device_id=device_id,
                 operator=operator
             )
+
+
+class BatchCheckInView(APIView):
+    """
+    POST /api/checkin/batch/
+    オフライン時に蓄積したチェックインを一括処理
+    
+    Body: {
+        "checkins": [
+            { "ticket_uuid": "...", "device_id": "...", "scanned_at": "ISO datetime" },
+            ...
+        ]
+    }
+    
+    Response: {
+        "results": [
+            { "ticket_uuid": "...", "success": true/false, "message": "...", "status": "entered/already_entered/..." },
+            ...
+        ],
+        "summary": { "success": N, "failed": M }
+    }
+    """
+    permission_classes = [IsAdminUser]
+    
+    def post(self, request):
+        checkins = request.data.get('checkins', [])
+        if not checkins:
+            return Response(
+                {"success": False, "message": "No checkins provided"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        results = []
+        success_count = 0
+        failed_count = 0
+        operator = request.user.username
+        
+        for item in checkins:
+            ticket_uuid = item.get('ticket_uuid')
+            device_id = item.get('device_id', '')
+            scanned_at = item.get('scanned_at')
+            
+            if not ticket_uuid:
+                results.append({
+                    "ticket_uuid": ticket_uuid,
+                    "success": False,
+                    "message": "ticket_uuid is required",
+                    "status": "invalid"
+                })
+                failed_count += 1
+                continue
+            
+            # 各チケットを個別トランザクションで処理
+            try:
+                with transaction.atomic():
+                    try:
+                        ticket = Ticket.objects.select_for_update().get(id=ticket_uuid)
+                    except Ticket.DoesNotExist:
+                        results.append({
+                            "ticket_uuid": ticket_uuid,
+                            "success": False,
+                            "message": "チケットが見つかりません",
+                            "status": "not_found"
+                        })
+                        failed_count += 1
+                        continue
+                    
+                    if ticket.status == Ticket.Status.ENTERED:
+                        results.append({
+                            "ticket_uuid": ticket_uuid,
+                            "success": False,
+                            "message": "既に入場済みです",
+                            "status": "already_entered"
+                        })
+                        failed_count += 1
+                        continue
+                    
+                    if ticket.status == Ticket.Status.CANCELLED:
+                        results.append({
+                            "ticket_uuid": ticket_uuid,
+                            "success": False,
+                            "message": "このチケットは無効です",
+                            "status": "cancelled"
+                        })
+                        failed_count += 1
+                        continue
+                    
+                    # 入場処理
+                    ticket.status = Ticket.Status.ENTERED
+                    ticket.entered_at = timezone.now()
+                    ticket.save()
+                    
+                    # ログ記録
+                    CheckInLog.objects.create(
+                        ticket=ticket,
+                        action='batch_checkin',
+                        success=True,
+                        message=f'バッチ処理で入場 (scanned_at: {scanned_at})',
+                        device_id=device_id,
+                        operator=operator
+                    )
+                    
+                    results.append({
+                        "ticket_uuid": str(ticket_uuid),
+                        "success": True,
+                        "message": "入場成功",
+                        "status": "entered"
+                    })
+                    success_count += 1
+                    
+            except Exception as e:
+                results.append({
+                    "ticket_uuid": str(ticket_uuid),
+                    "success": False,
+                    "message": str(e),
+                    "status": "error"
+                })
+                failed_count += 1
+        
+        return Response({
+            "results": results,
+            "summary": {
+                "success": success_count,
+                "failed": failed_count,
+                "total": len(checkins)
+            }
+        })
+
+
+class CheckInRevertView(APIView):
+    """
+    POST /api/admin/checkin/revert/
+    誤スキャンを取り消し（入場済み→有効に戻す）
+    
+    Body: { "ticket_id": "...", "reason": "..." }
+    """
+    permission_classes = [IsAdminUser]
+    
+    @transaction.atomic
+    def post(self, request):
+        ticket_id = request.data.get('ticket_id')
+        reason = request.data.get('reason', '')
+        
+        if not ticket_id:
+            return Response(
+                {"success": False, "message": "ticket_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            ticket = Ticket.objects.select_for_update().get(id=ticket_id)
+        except Ticket.DoesNotExist:
+            return Response(
+                {"success": False, "message": "チケットが見つかりません"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if ticket.status != Ticket.Status.ENTERED:
+            return Response(
+                {"success": False, "message": "このチケットは入場済みではありません"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 入場取り消し
+        ticket.status = Ticket.Status.VALID
+        ticket.entered_at = None
+        ticket.save()
+        
+        # 監査ログ
+        CheckInLog.objects.create(
+            ticket=ticket,
+            action='revert',
+            success=True,
+            message=f'入場取り消し: {reason}',
+            device_id='admin',
+            operator=request.user.username
+        )
+        
+        return Response({
+            "success": True,
+            "message": "入場を取り消しました",
+            "ticket": TicketSerializer(ticket).data
+        })
 
 
 @api_view(['GET'])
@@ -612,7 +796,8 @@ class ManualCheckInView(APIView):
     def post(self, request):
         """手動チェックイン実行"""
         ticket_id = request.data.get('ticket_id')
-        operator = request.data.get('operator', request.user.username)
+        # 🔒 セキュリティ修正: operatorは常にログインユーザーから取得（偽装防止）
+        operator = request.user.username
         
         try:
             ticket = Ticket.objects.select_for_update().get(id=ticket_id)
@@ -753,6 +938,7 @@ class TicketTransferCreateView(APIView):
         
         ticket_id = serializer.validated_data['ticket_id']
         ticket = Ticket.objects.get(id=ticket_id)
+        intended_email = request.data.get('intended_email', '').strip() or None
         
         # Generate unique token
         transfer_token = secrets.token_urlsafe(32)
@@ -762,7 +948,8 @@ class TicketTransferCreateView(APIView):
             ticket=ticket,
             from_user=request.user,
             transfer_token=transfer_token,
-            expires_at=timezone.now() + timedelta(hours=48)
+            expires_at=timezone.now() + timedelta(hours=48),
+            intended_email=intended_email
         )
         
         return Response({
@@ -771,6 +958,125 @@ class TicketTransferCreateView(APIView):
             "transfer_url": f"/transfer/{transfer_token}",
             "expires_at": transfer.expires_at.isoformat()
         }, status=status.HTTP_201_CREATED)
+
+
+class TicketTransferCancelView(APIView):
+    """
+    POST /api/transfers/cancel/
+    チケット譲渡をキャンセル（送信者のみ可能）
+    """
+    permission_classes = [IsAuthenticated]
+    
+    @transaction.atomic
+    def post(self, request):
+        transfer_id = request.data.get('transfer_id')
+        if not transfer_id:
+            return Response(
+                {"success": False, "message": "transfer_id is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            transfer = TicketTransfer.objects.select_for_update().get(id=transfer_id)
+        except TicketTransfer.DoesNotExist:
+            return Response(
+                {"success": False, "message": "譲渡が見つかりません。"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 権限チェック: 送信者のみキャンセル可能
+        if transfer.from_user != request.user:
+            return Response(
+                {"success": False, "message": "この譲渡をキャンセルする権限がありません。"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ステータスチェック: PENDING のみキャンセル可能
+        if transfer.status != TicketTransfer.Status.PENDING:
+            return Response(
+                {"success": False, "message": "この譲渡は既に処理済みです。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # キャンセル処理
+        transfer.status = TicketTransfer.Status.CANCELLED
+        transfer.save()
+        
+        return Response({
+            "success": True,
+            "message": "譲渡をキャンセルしました。"
+        })
+
+
+class TicketTransferPreviewView(APIView):
+    """
+    GET /api/transfers/preview?token=...
+    譲渡チケットのプレビュー（受け取り前に内容確認）
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        token = request.query_params.get('token')
+        if not token:
+            return Response(
+                {"success": False, "message": "token is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            transfer = TicketTransfer.objects.select_related(
+                'ticket', 'ticket__slot', 'ticket__attribute', 'from_user'
+            ).get(transfer_token=token)
+        except TicketTransfer.DoesNotExist:
+            return Response(
+                {"success": False, "message": "譲渡リンクが見つかりません"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # ステータスチェック
+        if transfer.status != TicketTransfer.Status.PENDING:
+            return Response({
+                "success": False,
+                "message": "この譲渡は既に処理済みか期限切れです",
+                "status": transfer.status
+            })
+        
+        if timezone.now() > transfer.expires_at:
+            return Response({
+                "success": False,
+                "message": "譲渡リンクの期限が切れています",
+                "status": "expired"
+            })
+        
+        # 譲渡先指定がある場合、このユーザーが対象かチェック
+        is_intended = True
+        if transfer.intended_email:
+            is_intended = request.user.email.lower() == transfer.intended_email.lower()
+        
+        ticket = transfer.ticket
+        return Response({
+            "success": True,
+            "transfer": {
+                "id": str(transfer.id),
+                "status": transfer.status,
+                "expires_at": transfer.expires_at.isoformat(),
+                "from_user": transfer.from_user.username,
+                "intended_email": transfer.intended_email,
+                "is_intended_recipient": is_intended,
+            },
+            "ticket": {
+                "id": str(ticket.id),
+                "status": ticket.status,
+                "guest_info": ticket.guest_info,
+                "slot": {
+                    "event_date": ticket.slot.event_date.isoformat() if ticket.slot else None,
+                    "start_time": ticket.slot.start_time.strftime('%H:%M') if ticket.slot else None,
+                },
+                "attribute": {
+                    "display_name": ticket.attribute.display_name if ticket.attribute else None,
+                }
+            }
+        })
 
 
 class TicketTransferAcceptView(APIView):
@@ -789,11 +1095,33 @@ class TicketTransferAcceptView(APIView):
         transfer_token = serializer.validated_data['transfer_token']
         
         try:
-            transfer = TicketTransfer.objects.select_for_update().get(transfer_token=transfer_token)
+            # ロックを取得して譲渡レコードを取得
+            transfer = TicketTransfer.objects.select_for_update().select_related('ticket').get(transfer_token=transfer_token)
         except TicketTransfer.DoesNotExist:
             return Response(
                 {"success": False, "message": "譲渡リンクが見つかりません。"},
                 status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 🔒 ロック後に再検証（TOCTOU対策）
+        if transfer.status != TicketTransfer.Status.PENDING:
+            return Response(
+                {"success": False, "message": "この譲渡は既に処理済みか期限切れです。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if timezone.now() > transfer.expires_at:
+            transfer.status = TicketTransfer.Status.EXPIRED
+            transfer.save()
+            return Response(
+                {"success": False, "message": "譲渡リンクの期限が切れています。"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if transfer.ticket.status != Ticket.Status.VALID:
+            return Response(
+                {"success": False, "message": "このチケットは既にキャンセルまたは使用済みです。"},
+                status=status.HTTP_400_BAD_REQUEST
             )
         
         # Check if user is trying to accept their own transfer
@@ -802,6 +1130,14 @@ class TicketTransferAcceptView(APIView):
                 {"success": False, "message": "自分自身に譲渡することはできません。"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # 🔒 譲渡先メール指定チェック
+        if transfer.intended_email:
+            if request.user.email.lower() != transfer.intended_email.lower():
+                return Response(
+                    {"success": False, "message": "この譲渡は別のメールアドレス宛てに送信されています。"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         
         # Update transfer
         transfer.to_user = request.user
@@ -829,10 +1165,11 @@ class TicketTransferAcceptView(APIView):
         old_reservation.total_tickets = old_reservation.tickets.count()
         old_reservation.save()
         
+        # フロント互換: success, message, ticket を返す
         return Response({
-            "status": "accepted",
+            "success": True,
             "message": "チケットを受け取りました。",
-            "ticket_id": ticket.id
+            "ticket": TicketSerializer(ticket).data
         })
 
 
@@ -865,11 +1202,38 @@ class ChatMessageView(APIView):
     """
     GET /api/chat/messages - チャットメッセージ一覧を取得
     POST /api/chat/messages - チャットメッセージを送信
+    
+    Query params:
+      - limit: 取得件数 (default: 50, max: 100)
+      - before: このcreated_at(ISO形式)以前のメッセージを取得（過去ログ読み込み用）
+    
+    レスポンス: 配列形式（フロント互換維持）
+    ページネーション情報は X-Has-More / X-Oldest-Id ヘッダで返す
     """
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
-        messages = ChatMessage.objects.select_related('sender').order_by('-created_at')[:100]
+        limit = min(int(request.query_params.get('limit', 50)), 100)
+        before = request.query_params.get('before')  # ISO datetime string
+        
+        queryset = ChatMessage.objects.select_related('sender').order_by('-created_at')
+        
+        # created_at ベースのカーソル（UUIDではなく時刻で安定させる）
+        if before:
+            try:
+                from django.utils.dateparse import parse_datetime
+                before_dt = parse_datetime(before)
+                if before_dt:
+                    queryset = queryset.filter(created_at__lt=before_dt)
+            except (ValueError, TypeError):
+                pass
+        
+        # limit+1 方式で has_more を判定（count() より効率的）
+        messages = list(queryset[:limit + 1])
+        has_more = len(messages) > limit
+        if has_more:
+            messages = messages[:limit]
+        
         data = []
         for msg in reversed(messages):
             data.append({
@@ -880,7 +1244,15 @@ class ChatMessageView(APIView):
                 'created_at': msg.created_at.isoformat(),
                 'is_staff': msg.sender.is_staff
             })
-        return Response(data)
+        
+        # 配列形式で返す（フロント互換維持）
+        # ページネーション情報はヘッダで返す
+        response = Response(data)
+        response['X-Has-More'] = 'true' if has_more else 'false'
+        if messages:
+            response['X-Oldest-Id'] = str(messages[-1].id)
+            response['X-Oldest-Created-At'] = messages[-1].created_at.isoformat()
+        return response
     
     def post(self, request):
         content = request.data.get('content', '').strip()
@@ -909,6 +1281,42 @@ class ChatMessageView(APIView):
             'created_at': msg.created_at.isoformat(),
             'is_staff': msg.sender.is_staff
         }, status=status.HTTP_201_CREATED)
+
+
+class ChatUnreadCountView(APIView):
+    """
+    GET /api/chat/unread
+    未読メッセージ数を取得
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        try:
+            read_status = ChatMessageRead.objects.get(user=request.user)
+            last_read_at = read_status.last_read_at
+        except ChatMessageRead.DoesNotExist:
+            # 一度も既読にしていない場合は全て未読
+            last_read_at = None
+        
+        if last_read_at:
+            unread_count = ChatMessage.objects.filter(
+                created_at__gt=last_read_at
+            ).exclude(sender=request.user).count()
+        else:
+            unread_count = ChatMessage.objects.exclude(sender=request.user).count()
+        
+        return Response({
+            "unread_count": unread_count,
+            "last_read_at": last_read_at.isoformat() if last_read_at else None
+        })
+    
+    def post(self, request):
+        """全て既読にする"""
+        ChatMessageRead.objects.update_or_create(
+            user=request.user,
+            defaults={"last_read_at": timezone.now()}
+        )
+        return Response({"success": True, "message": "全て既読にしました"})
 
 
 # === System Administration Views ===
@@ -1429,3 +1837,227 @@ class DataExportView(APIView):
             'count': len(data),
             'data': data
         })
+
+
+# === Emergency Stop & Device Statistics ===
+
+class EmergencyStopView(APIView):
+    """
+    GET /api/admin/emergency/
+    緊急停止状態を取得
+    
+    POST /api/admin/emergency/
+    緊急停止を切り替え
+    
+    Body: { "emergency_stop": true/false, "message": "optional message" }
+    """
+    permission_classes = [IsAdminUser]
+    
+    def get(self, request):
+        setting = SystemSetting.get_instance()
+        return Response({
+            "emergency_stop": setting.emergency_stop,
+            "emergency_message": setting.emergency_message,
+            "maintenance_mode": setting.maintenance_mode,
+            "updated_at": setting.updated_at.isoformat() if setting.updated_at else None,
+            "updated_by": setting.updated_by.username if setting.updated_by else None,
+        })
+    
+    def post(self, request):
+        setting = SystemSetting.get_instance()
+        
+        if 'emergency_stop' in request.data:
+            setting.emergency_stop = request.data['emergency_stop']
+        
+        if 'emergency_message' in request.data:
+            setting.emergency_message = request.data['emergency_message']
+        
+        if 'maintenance_mode' in request.data:
+            setting.maintenance_mode = request.data['maintenance_mode']
+        
+        setting.updated_by = request.user
+        setting.save()
+        
+        return Response({
+            "success": True,
+            "message": "設定を更新しました。",
+            "emergency_stop": setting.emergency_stop,
+            "emergency_message": setting.emergency_message,
+            "maintenance_mode": setting.maintenance_mode,
+        })
+
+
+class DeviceStatisticsView(APIView):
+    """
+    GET /api/admin/device-stats/
+    端末IDごとのチェックイン集計
+    
+    Query params:
+      - date: 対象日 (YYYY-MM-DD形式、省略時は今日)
+    """
+    permission_classes = [IsAdminUser]
+    
+    def get(self, request):
+        from django.db.models.functions import TruncHour
+        from datetime import date as date_type
+        
+        date_str = request.query_params.get('date')
+        if date_str:
+            try:
+                target_date = timezone.datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {"success": False, "message": "Invalid date format. Use YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            target_date = timezone.now().date()
+        
+        # 端末IDごとの集計
+        device_stats = CheckInLog.objects.filter(
+            created_at__date=target_date,
+            success=True
+        ).values('device_id').annotate(
+            total=Count('id'),
+        ).order_by('-total')
+        
+        # 時間帯別の集計（端末別）
+        hourly_stats = CheckInLog.objects.filter(
+            created_at__date=target_date,
+            success=True
+        ).annotate(
+            hour=TruncHour('created_at')
+        ).values('device_id', 'hour').annotate(
+            count=Count('id')
+        ).order_by('hour', 'device_id')
+        
+        # 時間帯別に整形
+        hourly_by_device = {}
+        for stat in hourly_stats:
+            device_id = stat['device_id'] or 'unknown'
+            hour_str = stat['hour'].strftime('%H:00') if stat['hour'] else 'unknown'
+            if device_id not in hourly_by_device:
+                hourly_by_device[device_id] = {}
+            hourly_by_device[device_id][hour_str] = stat['count']
+        
+        return Response({
+            "date": target_date.isoformat(),
+            "device_totals": list(device_stats),
+            "hourly_by_device": hourly_by_device,
+            "total_checkins": sum(d['total'] for d in device_stats),
+        })
+
+
+class EmergencyStopCheckView(APIView):
+    """
+    GET /api/emergency-status/
+    緊急停止状態を取得（認証不要、フロントからのポーリング用）
+    """
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        setting = SystemSetting.get_instance()
+        return Response({
+            "emergency_stop": setting.emergency_stop,
+            "emergency_message": setting.emergency_message,
+            "maintenance_mode": setting.maintenance_mode,
+        })
+
+
+class EmailSettingsView(APIView):
+    """
+    GET /api/admin/email-settings/
+    メール設定を取得
+    
+    POST /api/admin/email-settings/
+    メール設定を更新
+    """
+    permission_classes = [IsAdminUser]
+    
+    def get(self, request):
+        setting = SystemSetting.get_instance()
+        return Response({
+            "email_mode": setting.email_mode,
+            "sendgrid_api_key_set": bool(setting.sendgrid_api_key),
+            "sendgrid_api_key_masked": self._mask_api_key(setting.sendgrid_api_key),
+            "email_from_address": setting.email_from_address,
+            "email_from_name": setting.email_from_name,
+            "updated_at": setting.updated_at.isoformat() if setting.updated_at else None,
+            "updated_by": setting.updated_by.username if setting.updated_by else None,
+        })
+    
+    def post(self, request):
+        setting = SystemSetting.get_instance()
+        
+        if 'email_mode' in request.data:
+            setting.email_mode = request.data['email_mode']
+        
+        if 'sendgrid_api_key' in request.data:
+            # 空文字列でクリア、値があれば設定
+            setting.sendgrid_api_key = request.data['sendgrid_api_key']
+        
+        if 'email_from_address' in request.data:
+            setting.email_from_address = request.data['email_from_address']
+        
+        if 'email_from_name' in request.data:
+            setting.email_from_name = request.data['email_from_name']
+        
+        setting.updated_by = request.user
+        setting.save()
+        
+        return Response({
+            "success": True,
+            "message": "メール設定を更新しました",
+            "email_mode": setting.email_mode,
+            "sendgrid_api_key_set": bool(setting.sendgrid_api_key),
+        })
+    
+    def _mask_api_key(self, api_key: str) -> str:
+        """APIキーをマスクして表示"""
+        if not api_key:
+            return ""
+        if len(api_key) <= 8:
+            return "*" * len(api_key)
+        return api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:]
+
+
+class EmailTestView(APIView):
+    """
+    POST /api/admin/email-test/
+    テストメール送信
+    """
+    permission_classes = [IsAdminUser]
+    
+    def post(self, request):
+        to_email = request.data.get('to_email', request.user.email)
+        
+        if not to_email:
+            return Response(
+                {"success": False, "message": "送信先メールアドレスを指定してください"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        from .email_service import email_service
+        
+        subject = "【MATSU】テストメール"
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="UTF-8"></head>
+        <body style="font-family: sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h1 style="color: #4F46E5;">🎪 テストメール</h1>
+                <p>このメールはMATSUシステムからのテスト送信です。</p>
+                <div style="background: #f8f9fa; padding: 16px; border-radius: 8px; margin: 20px 0;">
+                    <p><strong>送信日時:</strong> {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    <p><strong>送信者:</strong> {request.user.username}</p>
+                </div>
+                <p>正常に受信できていれば、メール設定は正しく動作しています。</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        result = email_service.send_email([to_email], subject, html_content)
+        
+        return Response(result)

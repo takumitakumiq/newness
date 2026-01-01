@@ -125,6 +125,10 @@ start_frontend() {
     log_info "フロントエンド (Next.js) を起動中..."
     
     cd "$FRONTEND_DIR"
+
+    # Next.js から参照するAPIベースURLを自動設定
+    # これが未設定だと WebSocket/REST ともに接続先が不明になり「接続中」のままになる
+    export NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT"
     
     # バックグラウンドで起動
     npm run dev -- -p $FRONTEND_PORT > /tmp/matsu_frontend.log 2>&1 &

@@ -376,31 +376,39 @@ class TicketTransferCreateSerializer(serializers.Serializer):
         if ticket.status != Ticket.Status.VALID:
             raise serializers.ValidationError("有効なチケットのみ譲渡できます。")
         
-        # Check if there's already a pending transfer
-        if TicketTransfer.objects.filter(ticket=ticket, status=TicketTransfer.Status.PENDING).exists():
+        # Check if there's already a pending transfer (that hasn't expired)
+        pending_transfer = TicketTransfer.objects.filter(
+            ticket=ticket, 
+            status=TicketTransfer.Status.PENDING,
+            expires_at__gt=timezone.now()
+        ).first()
+        
+        if pending_transfer:
             raise serializers.ValidationError("このチケットには既に保留中の譲渡があります。")
+        
+        # Auto-expire old pending transfers
+        TicketTransfer.objects.filter(
+            ticket=ticket,
+            status=TicketTransfer.Status.PENDING,
+            expires_at__lte=timezone.now()
+        ).update(status=TicketTransfer.Status.EXPIRED)
         
         return value
 
 
 class TicketTransferAcceptSerializer(serializers.Serializer):
-    """チケット譲渡受取用"""
+    """
+    チケット譲渡受取用
+    
+    Note: 基本的なバリデーションのみ行う。
+    TOCTOU対策のため、詳細なステータスチェックはView側でロック取得後に再実行する。
+    """
     transfer_token = serializers.CharField(max_length=64)
     
     def validate_transfer_token(self, value):
-        try:
-            transfer = TicketTransfer.objects.get(transfer_token=value)
-        except TicketTransfer.DoesNotExist:
+        # 存在確認のみ（詳細チェックはView側でロック後に行う）
+        if not TicketTransfer.objects.filter(transfer_token=value).exists():
             raise serializers.ValidationError("無効な譲渡リンクです。")
-        
-        if transfer.status != TicketTransfer.Status.PENDING:
-            raise serializers.ValidationError("この譲渡は既に処理済みか期限切れです。")
-        
-        if timezone.now() > transfer.expires_at:
-            transfer.status = TicketTransfer.Status.EXPIRED
-            transfer.save()
-            raise serializers.ValidationError("譲渡リンクの期限が切れています。")
-        
         return value
 
 

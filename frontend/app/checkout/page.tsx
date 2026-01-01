@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DynamicForm, evaluateCondition } from "@/components/DynamicForm";
+import { MaintenanceCheck } from "@/components/MaintenanceCheck";
 import { useCartStore } from "@/store/useCartStore";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useThemeStore } from "@/store/useThemeStore";
@@ -175,6 +176,7 @@ export default function CheckoutPage() {
   }
 
   return (
+    <MaintenanceCheck>
     <div className="min-h-screen pb-8">
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b">
@@ -297,5 +299,6 @@ export default function CheckoutPage() {
         </Button>
       </main>
     </div>
+    </MaintenanceCheck>
   );
 }

@@ -120,21 +120,60 @@
 /* Light mode gradient background */
 .light .festival-gradient {
   background: linear-gradient(135deg, 
-    hsl(240, 30%, 96%) 0%, 
-    hsl(260, 30%, 98%) 50%, 
-    hsl(240, 40%, 95%) 100%
+    hsl(240, 40%, 97%) 0%, 
+    hsl(260, 50%, 98%) 50%, 
+    hsl(240, 50%, 96%) 100%
   );
 }
 
 /* Light mode text fixes */
 .light {
-  --foreground: 240 10% 15%;
-  --muted-foreground: 240 5% 45%;
+  --foreground: 240 10% 10%;
+  --muted-foreground: 240 5% 35%;
+  --card-foreground: 240 10% 10%;
+  --secondary-foreground: 240 10% 15%;
 }
 
 /* Light mode glassmorphism */
 .light .glass {
-  @apply bg-white/70 backdrop-blur-xl border border-slate-200/50;
+  @apply bg-white/80 backdrop-blur-xl border border-slate-300/60 shadow-lg;
+}
+
+/* Light mode specific fixes */
+.light .border-border {
+  border-color: hsl(240 5.9% 80%);
+}
+
+.light .bg-muted {
+  background-color: hsl(240 10% 94%);
+}
+
+.light .text-muted-foreground {
+  color: hsl(240 5% 35%);
+}
+
+/* Light mode card styling */
+.light .bg-card {
+  background-color: hsl(0 0% 100%);
+}
+
+/* Light mode input styling */
+.light input,
+.light textarea,
+.light select {
+  background-color: hsl(0 0% 100%);
+  border-color: hsl(240 5.9% 75%);
+  color: hsl(240 10% 10%);
+}
+
+.light input::placeholder,
+.light textarea::placeholder {
+  color: hsl(240 5% 50%);
+}
+
+/* Light mode button fixes */
+.light .bg-secondary {
+  background-color: hsl(240 10% 92%);
 }
 
 /* Animation for loading states */
@@ -149,4 +188,67 @@
 
 .animate-pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Light mode card hover effects */
+.light .bg-card\/50 {
+  background-color: rgba(255, 255, 255, 0.8);
+}
+
+.light .bg-card\/80 {
+  background-color: rgba(255, 255, 255, 0.9);
+}
+
+/* Dark mode specific styles */
+.dark .text-foreground {
+  color: hsl(0 0% 98%);
+}
+
+.dark .bg-muted\/50 {
+  background-color: hsla(240, 3.7%, 15.9%, 0.5);
+}
+
+/* Festival neon color for both modes */
+.text-festival-neon {
+  color: hsl(186, 100%, 42%);
+}
+
+.light .text-festival-neon {
+  color: hsl(186, 100%, 35%);
+}
+
+.bg-festival-neon {
+  background-color: hsl(186, 100%, 42%);
+}
+
+.bg-festival-neon\/10 {
+  background-color: hsla(186, 100%, 42%, 0.1);
+}
+
+.light .bg-festival-neon\/10 {
+  background-color: hsla(186, 100%, 35%, 0.15);
+}
+
+.bg-festival-neon\/20 {
+  background-color: hsla(186, 100%, 42%, 0.2);
+}
+
+.light .bg-festival-neon\/20 {
+  background-color: hsla(186, 100%, 35%, 0.2);
+}
+
+.border-festival-neon {
+  border-color: hsl(186, 100%, 42%);
+}
+
+.light .border-festival-neon {
+  border-color: hsl(186, 100%, 35%);
+}
+
+.border-festival-neon\/20 {
+  border-color: hsla(186, 100%, 42%, 0.2);
+}
+
+.light .border-festival-neon\/20 {
+  border-color: hsla(186, 100%, 35%, 0.3);
 }

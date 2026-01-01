@@ -35,7 +35,12 @@ async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit & { auth?: boolean }
 ): Promise<T> {
-  const url = `${API_BASE}/api${endpoint}`;
+  // Ensure trailing slash for Django REST framework compatibility
+  // Split endpoint into path and query string
+  const [path, queryString] = endpoint.split('?');
+  const normalizedPath = path.endsWith('/') ? path : `${path}/`;
+  const normalizedEndpoint = queryString ? `${normalizedPath}?${queryString}` : normalizedPath;
+  const url = `${API_BASE}/api${normalizedEndpoint}`;
   
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -337,4 +342,11 @@ export async function getMyTransfers(): Promise<TicketTransfer[]> {
     `/mypage/transfers`
   );
   return Array.isArray(data) ? data : data.results;
+}
+
+export async function cancelTicketTransfer(transferId: string): Promise<{ success: boolean; message: string }> {
+  return fetchApi<{ success: boolean; message: string }>(`/transfers/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ transfer_id: transferId }),
+  });
 }

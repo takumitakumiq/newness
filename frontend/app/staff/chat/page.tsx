@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,9 @@ import {
   MessageSquare, 
   Users, 
   RefreshCw,
-  User
+  User,
+  Wifi,
+  WifiOff
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
 
@@ -22,29 +24,207 @@ interface ChatMessage {
   is_staff: boolean;
 }
 
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
 export default function ChatPage() {
   const { user } = useAuthStore();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttempts = useRef(0);
+  const reconnectEnabledRef = useRef(true);
+  const manualCloseRef = useRef(false);
+  const isUserNearBottomRef = useRef(true);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToBottom = (force = false) => {
+    // force=true の場合、または ユーザーが下部付近にいる場合のみスクロール
+    if (force || isUserNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   };
 
+  // スクロール位置を監視して、ユーザーが下部付近にいるか判定
+  const handleScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    // 下から100px以内なら「下部にいる」とみなす
+    isUserNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
+  }, []);
+
+  // WebSocket connection
+  const connectWebSocket = useCallback(() => {
+    // 既存接続があれば閉じる（重複接続防止）
+    if (wsRef.current) {
+      manualCloseRef.current = true;
+      try {
+        wsRef.current.close();
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
+    }
+
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      setConnectionStatus("error");
+      setLoading(false);
+      return;
+    }
+
+    // Build WebSocket URL
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    if (!apiUrl) {
+      console.error("NEXT_PUBLIC_API_URL is not set");
+      setConnectionStatus("error");
+      setLoading(false);
+      return;
+    }
+    const wsProtocol = apiUrl.startsWith("https") ? "wss" : "ws";
+    const wsHost = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    if (!wsHost) {
+      console.error("Invalid NEXT_PUBLIC_API_URL:", apiUrl);
+      setConnectionStatus("error");
+      setLoading(false);
+      return;
+    }
+    const wsUrl = `${wsProtocol}://${wsHost}/ws/chat/?token=${token}`;
+
+    setConnectionStatus("connecting");
+
+    let ws: WebSocket;
+    try {
+      manualCloseRef.current = false;
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      console.error("Failed to create WebSocket:", e);
+      setConnectionStatus("error");
+      setLoading(false);
+      return;
+    }
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setConnectionStatus("connected");
+      reconnectAttempts.current = 0;
+      console.log("WebSocket connected");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === "history") {
+          // Initial history load
+          setMessages(data.messages || []);
+          setLoading(false);
+        } else if (data.type === "message") {
+          // New message received
+          setMessages((prev) => [...prev, data]);
+        } else if (data.type === "error") {
+          console.error("Chat error:", data.message);
+        }
+      } catch (e) {
+        console.error("Failed to parse WebSocket message:", e);
+      }
+    };
+
+    ws.onclose = (event) => {
+      setConnectionStatus("disconnected");
+      console.log("WebSocket disconnected:", event.code);
+
+      // 意図的に閉じた場合（画面遷移/StrictModeのクリーンアップ等）は再接続しない
+      if (!reconnectEnabledRef.current || manualCloseRef.current) {
+        return;
+      }
+      
+      // Auto-reconnect with exponential backoff
+      if (event.code !== 4001) { // 4001 = unauthorized, don't retry
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+        reconnectAttempts.current++;
+        
+        reconnectTimeoutRef.current = setTimeout(() => {
+          console.log(`Reconnecting... (attempt ${reconnectAttempts.current})`);
+          connectWebSocket();
+        }, delay);
+      }
+    };
+
+    ws.onerror = () => {
+      setConnectionStatus("error");
+      setLoading(false);
+    };
+  }, []);
+
+  // Disconnect WebSocket
+  const disconnectWebSocket = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+    if (wsRef.current) {
+      manualCloseRef.current = true;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  }, []);
+
+  // Send message via WebSocket
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim() || sending) return;
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      setSending(true);
+      wsRef.current.send(JSON.stringify({
+        type: "message",
+        content: newMessage.trim()
+      }));
+      setNewMessage("");
+      setSending(false);
+    } else {
+      // Fallback to REST API if WebSocket is not connected
+      setSending(true);
+      try {
+        const token = localStorage.getItem("access_token");
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+        const res = await fetch(`${apiUrl}/api/chat/messages/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ content: newMessage.trim() }),
+        });
+
+        if (res.ok) {
+          setNewMessage("");
+          // Message will come via WebSocket, or fetch if disconnected
+        }
+      } catch (error) {
+        console.error("Failed to send message:", error);
+      } finally {
+        setSending(false);
+      }
+    }
+  };
+
+  // Fetch messages via REST (fallback)
   const fetchMessages = async () => {
     try {
       const token = localStorage.getItem("access_token");
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/chat/messages`, {
+      const res = await fetch(`${apiUrl}/api/chat/messages/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
-        // APIは配列形式で返す（古い順）
         setMessages(Array.isArray(data) ? data : []);
       }
     } catch (error) {
@@ -54,52 +234,34 @@ export default function ChatPage() {
     }
   };
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || sending) return;
-
-    setSending(true);
-    try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/chat/messages`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ content: newMessage.trim() }),
-      });
-
-      if (res.ok) {
-        setNewMessage("");
-        fetchMessages();
-      }
-    } catch (error) {
-      console.error("Failed to send message:", error);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  // Initial fetch and polling
+  // Connect on mount
   useEffect(() => {
-    fetchMessages();
+    reconnectEnabledRef.current = true;
+    connectWebSocket();
     
-    // Poll for new messages every 3 seconds
-    pollIntervalRef.current = setInterval(fetchMessages, 3000);
-
     return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
+      reconnectEnabledRef.current = false;
+      disconnectWebSocket();
     };
-  }, []);
+  }, [connectWebSocket, disconnectWebSocket]);
 
-  // Scroll to bottom when messages change
+  // 初回ロード完了時に一番下へスクロール
+  const initialScrollDone = useRef(false);
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (!loading && messages.length > 0 && !initialScrollDone.current) {
+      scrollToBottom(true);
+      initialScrollDone.current = true;
+    }
+  }, [loading, messages.length]);
+
+  // 新しいメッセージが来た時、ユーザーが下部にいる場合のみスクロール
+  const prevMessagesLengthRef = useRef(0);
+  useEffect(() => {
+    if (messages.length > prevMessagesLengthRef.current && initialScrollDone.current) {
+      scrollToBottom(); // isUserNearBottomRef に基づいてスクロールするかを判定
+    }
+    prevMessagesLengthRef.current = messages.length;
+  }, [messages.length]);
 
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
@@ -121,16 +283,48 @@ export default function ChatPage() {
     return groups;
   }, {} as Record<string, ChatMessage[]>);
 
+  const getStatusColor = () => {
+    switch (connectionStatus) {
+      case "connected": return "text-green-500";
+      case "connecting": return "text-yellow-500";
+      case "disconnected": return "text-gray-400";
+      case "error": return "text-red-500";
+    }
+  };
+
+  const getStatusIcon = () => {
+    if (connectionStatus === "connected") {
+      return <Wifi className="h-4 w-4" />;
+    }
+    return <WifiOff className="h-4 w-4" />;
+  };
+
   return (
     <div className="h-[calc(100vh-12rem)] flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">スタッフチャット</h1>
-          <p className="text-gray-500 text-sm">リアルタイムで管理者・スタッフと連絡</p>
+          <p className="text-gray-500 text-sm flex items-center gap-2">
+            <span className={getStatusColor()}>{getStatusIcon()}</span>
+            {connectionStatus === "connected" ? "リアルタイム接続中" : 
+             connectionStatus === "connecting" ? "接続中..." :
+             connectionStatus === "error" ? "接続エラー" : "切断されました"}
+          </p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchMessages}>
-          <RefreshCw className="h-4 w-4 mr-2" />
-          更新
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={() => {
+            if (connectionStatus !== "connected") {
+              disconnectWebSocket();
+              connectWebSocket();
+            } else {
+              fetchMessages();
+            }
+          }}
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${connectionStatus === "connecting" ? "animate-spin" : ""}`} />
+          {connectionStatus === "connected" ? "更新" : "再接続"}
         </Button>
       </div>
 
@@ -145,7 +339,11 @@ export default function ChatPage() {
           </CardTitle>
         </CardHeader>
         
-        <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+        <CardContent 
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+        >
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <RefreshCw className="h-8 w-8 animate-spin text-gray-400" />

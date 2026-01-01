@@ -72,7 +72,7 @@ export default function AttributesPage() {
   const fetchAttributes = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/attributes`, {
+      const res = await fetch(`${apiUrl}/api/attributes/`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (res.ok) {

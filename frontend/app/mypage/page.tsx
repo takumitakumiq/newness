@@ -36,9 +36,10 @@ import {
 } from "@/components/ui/dialog";
 import { TicketCard } from "@/components/TicketCard";
 import { DynamicForm } from "@/components/DynamicForm";
+import { MaintenanceCheck } from "@/components/MaintenanceCheck";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useThemeStore } from "@/store/useThemeStore";
-import { getMyTickets, cancelTicket, updateTicketInfo, createTicketTransfer, getAttributes } from "@/lib/api";
+import { getMyTickets, cancelTicket, updateTicketInfo, createTicketTransfer, getAttributes, getMyTransfers, cancelTicketTransfer, type TicketTransfer } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/utils";
 import type { AttributeConfig } from "@/lib/types";
 import type { Ticket } from "@/lib/types";
@@ -74,6 +75,9 @@ export default function MyPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [transferLink, setTransferLink] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [pendingTransfers, setPendingTransfers] = useState<TicketTransfer[]>([]);
+  const [cancelTransferDialogOpen, setCancelTransferDialogOpen] = useState(false);
+  const [selectedTransfer, setSelectedTransfer] = useState<TicketTransfer | null>(null);
 
   // Check auth on mount
   useEffect(() => {
@@ -99,11 +103,25 @@ export default function MyPage() {
     }
   }, [isAuthenticated]);
 
+  // Fetch pending transfers
+  const fetchPendingTransfers = useCallback(async () => {
+    if (!isAuthenticated) return;
+    
+    try {
+      const transfers = await getMyTransfers();
+      // 保留中の譲渡のみフィルタ
+      setPendingTransfers(transfers.filter(t => t.status === 'pending'));
+    } catch {
+      // エラーは無視
+    }
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (isAuthenticated) {
       fetchTickets();
+      fetchPendingTransfers();
     }
-  }, [isAuthenticated, fetchTickets]);
+  }, [isAuthenticated, fetchTickets, fetchPendingTransfers]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,6 +245,30 @@ export default function MyPage() {
     }
   };
 
+  // 譲渡をキャンセル
+  const handleCancelTransfer = async () => {
+    if (!selectedTransfer) return;
+    
+    setActionLoading(true);
+    try {
+      await cancelTicketTransfer(selectedTransfer.id);
+      await fetchPendingTransfers();
+      await fetchTickets();
+      setCancelTransferDialogOpen(false);
+      setSelectedTransfer(null);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "譲渡のキャンセルに失敗しました"));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openCancelTransferDialog = (transfer: TicketTransfer) => {
+    setSelectedTransfer(transfer);
+    setError(null);
+    setCancelTransferDialogOpen(true);
+  };
+
   // Group tickets by status
   const validTickets = tickets.filter((t) => t.status === "valid");
   const enteredTickets = tickets.filter((t) => t.status === "entered");
@@ -241,6 +283,7 @@ export default function MyPage() {
   }
 
   return (
+    <MaintenanceCheck>
     <div className="min-h-screen pb-8">
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b">
@@ -451,6 +494,73 @@ export default function MyPage() {
                   exit={{ opacity: 0 }}
                   className="space-y-8"
                 >
+                  {/* Pending Transfers */}
+                  {pendingTransfers.length > 0 && (
+                    <section className="space-y-4">
+                      <h2 className="text-lg font-semibold flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-yellow-500" />
+                        譲渡中 ({pendingTransfers.length})
+                      </h2>
+                      <div className="grid gap-4">
+                        {pendingTransfers.map((transfer) => (
+                          <Card key={transfer.id} className="glass border-yellow-500/30">
+                            <CardContent className="pt-4 space-y-3">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  {transfer.ticket_detail ? (
+                                    <>
+                                      <p className="font-medium">
+                                        {transfer.ticket_detail.slot_detail.event_date} {transfer.ticket_detail.slot_detail.start_time}
+                                      </p>
+                                      <p className="text-sm text-muted-foreground">
+                                        {transfer.ticket_detail.attribute_detail.display_name}
+                                      </p>
+                                    </>
+                                  ) : (
+                                    <p className="text-sm text-muted-foreground">チケットID: {transfer.ticket}</p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    有効期限: {new Date(transfer.expires_at).toLocaleString("ja-JP")}
+                                  </p>
+                                </div>
+                                <span className="px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-600 dark:text-yellow-400">
+                                  {transfer.status_display}
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={async () => {
+                                    const fullUrl = `${window.location.origin}/transfer/${transfer.transfer_token}`;
+                                    try {
+                                      await navigator.clipboard.writeText(fullUrl);
+                                      setLinkCopied(true);
+                                      setTimeout(() => setLinkCopied(false), 2000);
+                                    } catch {
+                                      setError("コピーに失敗しました");
+                                    }
+                                  }}
+                                >
+                                  <Copy className="h-4 w-4 mr-1" />
+                                  {linkCopied ? "コピー済み" : "リンクをコピー"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => openCancelTransferDialog(transfer)}
+                                >
+                                  <X className="h-4 w-4 mr-1" />
+                                  キャンセル
+                                </Button>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
                   {/* Valid Tickets */}
                   {validTickets.length > 0 && (
                     <section className="space-y-4">
@@ -716,6 +826,46 @@ export default function MyPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Cancel Transfer Dialog */}
+      <Dialog open={cancelTransferDialogOpen} onOpenChange={setCancelTransferDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              譲渡をキャンセル
+            </DialogTitle>
+            <DialogDescription>
+              この譲渡をキャンセルしますか？キャンセルすると、チケットは再び使用可能になります。
+              {selectedTransfer?.ticket_detail && (
+                <div className="mt-4 p-4 bg-muted rounded-lg">
+                  <p className="font-medium">
+                    {selectedTransfer.ticket_detail.slot_detail.event_date} {selectedTransfer.ticket_detail.slot_detail.start_time}
+                  </p>
+                  <p className="text-sm">{selectedTransfer.ticket_detail.attribute_detail.display_name}</p>
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelTransferDialogOpen(false)}>
+              戻る
+            </Button>
+            <Button variant="destructive" onClick={handleCancelTransfer} disabled={actionLoading}>
+              {actionLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <X className="h-4 w-4 mr-2" />
+              )}
+              キャンセルする
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+    </MaintenanceCheck>
   );
 }

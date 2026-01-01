@@ -399,6 +399,12 @@ class TicketTransfer(models.Model):
         blank=True,
         verbose_name="受取日時"
     )
+    intended_email = models.EmailField(
+        blank=True,
+        null=True,
+        verbose_name="指定受取メール",
+        help_text="指定された場合、このメールのユーザーのみ受取可能"
+    )
     
     class Meta:
         db_table = "api_tickettransfer"
@@ -485,3 +491,82 @@ class ChatMessageRead(models.Model):
 
     def __str__(self):
         return f"{self.user.username}: {self.last_read_at}"
+
+
+class SystemSetting(models.Model):
+    """
+    システム全体の設定（緊急停止、メール設定など）
+    シングルトンパターン: 常に1レコードのみ
+    """
+    class EmailMode(models.TextChoices):
+        TEST = "test", "テストモード（メール送信しない）"
+        PRODUCTION = "production", "本番モード（SendGrid送信）"
+    
+    id = models.AutoField(primary_key=True)
+    emergency_stop = models.BooleanField(
+        default=False,
+        verbose_name="緊急停止",
+        help_text="ONにするとチェックイン・チェックアウトが全て停止"
+    )
+    emergency_message = models.TextField(
+        blank=True,
+        default="",
+        verbose_name="緊急停止時のメッセージ"
+    )
+    maintenance_mode = models.BooleanField(
+        default=False,
+        verbose_name="メンテナンスモード",
+        help_text="ONにすると一般ユーザーはアクセス不可"
+    )
+    
+    # メール設定
+    email_mode = models.CharField(
+        max_length=20,
+        choices=EmailMode.choices,
+        default=EmailMode.TEST,
+        verbose_name="メール送信モード"
+    )
+    sendgrid_api_key = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        verbose_name="SendGrid APIキー",
+        help_text="本番モード時に使用するSendGrid APIキー"
+    )
+    email_from_address = models.EmailField(
+        default="noreply@example.com",
+        verbose_name="送信元メールアドレス"
+    )
+    email_from_name = models.CharField(
+        max_length=100,
+        default="MATSU チケットシステム",
+        verbose_name="送信者名"
+    )
+    
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新日時")
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="更新者"
+    )
+
+    class Meta:
+        db_table = "api_systemsetting"
+        verbose_name = "システム設定"
+        verbose_name_plural = "システム設定"
+
+    def __str__(self):
+        return f"SystemSetting (emergency={self.emergency_stop})"
+
+    def save(self, *args, **kwargs):
+        # シングルトンパターン: 常にid=1で上書き
+        self.id = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_instance(cls):
+        """Get or create the singleton instance."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

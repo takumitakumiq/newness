@@ -28,6 +28,7 @@ import {
   Key,
   Mail,
   User,
+  AlertOctagon,
 } from "lucide-react";
 
 interface HealthCheck {
@@ -99,12 +100,36 @@ interface UserEditForm {
   new_password: string;
 }
 
+interface EmergencySettings {
+  emergency_stop: boolean;
+  emergency_message: string;
+  maintenance_mode: boolean;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+interface EmailSettings {
+  email_mode: "test" | "production";
+  sendgrid_api_key_set: boolean;
+  sendgrid_api_key_masked: string;
+  email_from_address: string;
+  email_from_name: string;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
 export default function SystemPage() {
   const [health, setHealth] = useState<HealthCheck | null>(null);
   const [backups, setBackups] = useState<Backup[]>([]);
   const [cleanup, setCleanup] = useState<CleanupPreview | null>(null);
   const [users, setUsers] = useState<UserData[]>([]);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
+  const [emergency, setEmergency] = useState<EmergencySettings | null>(null);
+  const [emergencyForm, setEmergencyForm] = useState({
+    emergency_stop: false,
+    emergency_message: "",
+    maintenance_mode: false,
+  });
   const [userForm, setUserForm] = useState<UserEditForm>({
     username: "",
     email: "",
@@ -116,6 +141,14 @@ export default function SystemPage() {
     reset_password: false,
     new_password: "",
   });
+  const [emailSettings, setEmailSettings] = useState<EmailSettings | null>(null);
+  const [emailForm, setEmailForm] = useState({
+    email_mode: "test" as "test" | "production",
+    sendgrid_api_key: "",
+    email_from_address: "",
+    email_from_name: "",
+  });
+  const [testEmailAddress, setTestEmailAddress] = useState("");
   const [loading, setLoading] = useState({
     health: false,
     backup: false,
@@ -123,17 +156,32 @@ export default function SystemPage() {
     users: false,
     export: false,
     cache: false,
+    emergency: false,
+    email: false,
+    emailTest: false,
   });
-  const [activeTab, setActiveTab] = useState<"health" | "backup" | "users" | "cleanup" | "export">("health");
+  const [activeTab, setActiveTab] = useState<"health" | "backup" | "users" | "cleanup" | "export" | "emergency" | "email">("health");
 
   const getToken = () => localStorage.getItem("access_token");
+  
+  // Next.js rewriteでトレイリングスラッシュが消失する問題を回避するため、直接バックエンドURLを使用
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8005";
+  
+  const apiFetch = async (path: string, options: RequestInit = {}) => {
+    const url = `${API_BASE}${path}`;
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        Authorization: `Bearer ${getToken()}`,
+      },
+    });
+  };
 
   const fetchHealth = async () => {
     setLoading((l) => ({ ...l, health: true }));
     try {
-      const res = await fetch("/api/admin/system/health", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiFetch("/api/admin/system/health/");
       if (res.ok) {
         const data = await res.json();
         setHealth(data);
@@ -145,12 +193,142 @@ export default function SystemPage() {
     }
   };
 
+  const fetchEmergency = async () => {
+    setLoading((l) => ({ ...l, emergency: true }));
+    try {
+      const res = await apiFetch("/api/admin/emergency/");
+      if (res.ok) {
+        const data = await res.json();
+        setEmergency(data);
+        setEmergencyForm({
+          emergency_stop: data.emergency_stop,
+          emergency_message: data.emergency_message || "",
+          maintenance_mode: data.maintenance_mode,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch emergency:", error);
+    } finally {
+      setLoading((l) => ({ ...l, emergency: false }));
+    }
+  };
+
+  const updateEmergency = async () => {
+    if (emergencyForm.emergency_stop && !confirm("緊急停止を有効にしますか？全てのチェックインが停止します。")) {
+      return;
+    }
+    
+    setLoading((l) => ({ ...l, emergency: true }));
+    try {
+      const res = await apiFetch("/api/admin/emergency/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(emergencyForm),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        alert(data.message || "設定を更新しました");
+        fetchEmergency();
+      } else {
+        alert("更新に失敗しました");
+      }
+    } catch (error) {
+      console.error("Failed to update emergency:", error);
+      alert("更新に失敗しました");
+    } finally {
+      setLoading((l) => ({ ...l, emergency: false }));
+    }
+  };
+
+  const fetchEmailSettings = async () => {
+    setLoading((l) => ({ ...l, email: true }));
+    try {
+      const res = await apiFetch("/api/admin/email-settings/");
+      if (res.ok) {
+        const data = await res.json();
+        setEmailSettings(data);
+        setEmailForm({
+          email_mode: data.email_mode || "test",
+          sendgrid_api_key: "",
+          email_from_address: data.email_from_address || "",
+          email_from_name: data.email_from_name || "",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch email settings:", error);
+    } finally {
+      setLoading((l) => ({ ...l, email: false }));
+    }
+  };
+
+  const updateEmailSettings = async () => {
+    setLoading((l) => ({ ...l, email: true }));
+    try {
+      const payload: Record<string, string> = {
+        email_mode: emailForm.email_mode,
+        email_from_address: emailForm.email_from_address,
+        email_from_name: emailForm.email_from_name,
+      };
+      
+      // APIキーは入力があった場合のみ送信
+      if (emailForm.sendgrid_api_key) {
+        payload.sendgrid_api_key = emailForm.sendgrid_api_key;
+      }
+      
+      const res = await apiFetch("/api/admin/email-settings/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        alert(data.message || "メール設定を更新しました");
+        setEmailForm((f) => ({ ...f, sendgrid_api_key: "" }));
+        fetchEmailSettings();
+      } else {
+        alert("更新に失敗しました");
+      }
+    } catch (error) {
+      console.error("Failed to update email settings:", error);
+      alert("更新に失敗しました");
+    } finally {
+      setLoading((l) => ({ ...l, email: false }));
+    }
+  };
+
+  const sendTestEmail = async () => {
+    if (!testEmailAddress) {
+      alert("送信先メールアドレスを入力してください");
+      return;
+    }
+    
+    setLoading((l) => ({ ...l, emailTest: true }));
+    try {
+      const res = await apiFetch("/api/admin/email-test/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_email: testEmailAddress }),
+      });
+      
+      const data = await res.json();
+      if (data.success) {
+        alert(`テストメール送信${emailForm.email_mode === "test" ? "（ログ出力のみ）" : ""}完了: ${data.message || "成功"}`);
+      } else {
+        alert(`テストメール送信失敗: ${data.message || data.error || "不明なエラー"}`);
+      }
+    } catch (error) {
+      console.error("Failed to send test email:", error);
+      alert("テストメール送信に失敗しました");
+    } finally {
+      setLoading((l) => ({ ...l, emailTest: false }));
+    }
+  };
+
   const fetchBackups = async () => {
     setLoading((l) => ({ ...l, backup: true }));
     try {
-      const res = await fetch("/api/admin/system/backup", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiFetch("/api/admin/system/backup/");
       if (res.ok) {
         const data = await res.json();
         setBackups(data.backups || []);
@@ -165,12 +343,9 @@ export default function SystemPage() {
   const createBackup = async (type: "sqlite" | "json") => {
     setLoading((l) => ({ ...l, backup: true }));
     try {
-      const res = await fetch("/api/admin/system/backup", {
+      const res = await apiFetch("/api/admin/system/backup/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type }),
       });
       if (res.ok) {
@@ -190,12 +365,9 @@ export default function SystemPage() {
     if (!confirm(`${filename} を削除しますか？`)) return;
     
     try {
-      const res = await fetch("/api/admin/system/backup", {
+      const res = await apiFetch("/api/admin/system/backup/", {
         method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename }),
       });
       if (res.ok) {
@@ -209,9 +381,7 @@ export default function SystemPage() {
   const fetchCleanupPreview = async () => {
     setLoading((l) => ({ ...l, cleanup: true }));
     try {
-      const res = await fetch("/api/admin/system/cleanup", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiFetch("/api/admin/system/cleanup/");
       if (res.ok) {
         const data = await res.json();
         setCleanup(data);
@@ -228,12 +398,9 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, cleanup: true }));
     try {
-      const res = await fetch("/api/admin/system/cleanup", {
+      const res = await apiFetch("/api/admin/system/cleanup/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
       if (res.ok) {
@@ -251,9 +418,7 @@ export default function SystemPage() {
   const fetchUsers = async () => {
     setLoading((l) => ({ ...l, users: true }));
     try {
-      const res = await fetch("/api/admin/system/users", {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiFetch("/api/admin/system/users/");
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users || []);
@@ -300,12 +465,9 @@ export default function SystemPage() {
         body.new_password = userForm.new_password;
       }
       
-      const res = await fetch("/api/admin/system/users", {
+      const res = await apiFetch("/api/admin/system/users/", {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       
@@ -327,12 +489,9 @@ export default function SystemPage() {
     if (!confirm(`${username} を削除しますか？この操作は取り消せません。`)) return;
     
     try {
-      const res = await fetch("/api/admin/system/users", {
+      const res = await apiFetch("/api/admin/system/users/", {
         method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
       
@@ -350,12 +509,9 @@ export default function SystemPage() {
 
   const updateUserRole = async (userId: number, isStaff: boolean) => {
     try {
-      const res = await fetch("/api/admin/system/users", {
+      const res = await apiFetch("/api/admin/system/users/", {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, is_staff: isStaff }),
       });
       if (res.ok) {
@@ -371,12 +527,9 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, cache: true }));
     try {
-      const res = await fetch("/api/admin/system/cache", {
+      const res = await apiFetch("/api/admin/system/cache/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "clear" }),
       });
       if (res.ok) {
@@ -392,9 +545,7 @@ export default function SystemPage() {
   const exportData = async (type: string, format: string) => {
     setLoading((l) => ({ ...l, export: true }));
     try {
-      const res = await fetch(`/api/admin/system/export?type=${type}&format=${format}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await apiFetch(`/api/admin/system/export/?type=${type}&format=${format}`);
       
       if (format === "csv") {
         const blob = await res.blob();
@@ -426,6 +577,8 @@ export default function SystemPage() {
     if (activeTab === "backup") fetchBackups();
     if (activeTab === "cleanup") fetchCleanupPreview();
     if (activeTab === "users") fetchUsers();
+    if (activeTab === "emergency") fetchEmergency();
+    if (activeTab === "email") fetchEmailSettings();
   }, [activeTab]);
 
   const StatusIcon = ({ status }: { status: string }) => {
@@ -441,6 +594,8 @@ export default function SystemPage() {
     { id: "users", label: "ユーザー管理", icon: Users },
     { id: "cleanup", label: "クリーンアップ", icon: Trash2 },
     { id: "export", label: "エクスポート", icon: FileDown },
+    { id: "emergency", label: "緊急停止", icon: AlertOctagon },
+    { id: "email", label: "メール設定", icon: Mail },
   ] as const;
 
   return (
@@ -1118,6 +1273,309 @@ export default function SystemPage() {
                     CSV
                   </Button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Emergency Tab */}
+        {activeTab === "emergency" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold text-slate-900">緊急停止設定</h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchEmergency}
+                disabled={loading.emergency}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${loading.emergency ? "animate-spin" : ""}`} />
+                更新
+              </Button>
+            </div>
+
+            {/* Current Status */}
+            {emergency && (
+              <div className={`p-4 rounded-xl border-2 ${
+                emergency.emergency_stop 
+                  ? "bg-red-50 border-red-200" 
+                  : "bg-emerald-50 border-emerald-200"
+              }`}>
+                <div className="flex items-center gap-3">
+                  {emergency.emergency_stop ? (
+                    <AlertOctagon className="h-8 w-8 text-red-600" />
+                  ) : (
+                    <CheckCircle className="h-8 w-8 text-emerald-600" />
+                  )}
+                  <div>
+                    <p className={`font-bold text-lg ${emergency.emergency_stop ? "text-red-800" : "text-emerald-800"}`}>
+                      {emergency.emergency_stop ? "緊急停止中" : "正常稼働中"}
+                    </p>
+                    {emergency.updated_at && (
+                      <p className="text-sm text-slate-500">
+                        最終更新: {new Date(emergency.updated_at).toLocaleString("ja-JP")} 
+                        {emergency.updated_by && ` (${emergency.updated_by})`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Settings Form */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-6">
+              {/* Emergency Stop Toggle */}
+              <div className="flex items-center justify-between p-4 bg-red-50 rounded-lg border border-red-200">
+                <div>
+                  <p className="font-medium text-red-800">緊急停止</p>
+                  <p className="text-sm text-red-600">
+                    ONにすると、全てのチェックイン・チェックアウトが停止します
+                  </p>
+                </div>
+                <button
+                  onClick={() => setEmergencyForm(f => ({ ...f, emergency_stop: !f.emergency_stop }))}
+                  className={`relative w-14 h-8 rounded-full transition-colors ${
+                    emergencyForm.emergency_stop ? "bg-red-600" : "bg-slate-300"
+                  }`}
+                >
+                  <span 
+                    className={`absolute top-1 left-1 w-6 h-6 bg-white rounded-full transition-transform ${
+                      emergencyForm.emergency_stop ? "translate-x-6" : ""
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Emergency Message */}
+              {emergencyForm.emergency_stop && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    緊急停止メッセージ
+                  </label>
+                  <textarea
+                    value={emergencyForm.emergency_message}
+                    onChange={(e) => setEmergencyForm(f => ({ ...f, emergency_message: e.target.value }))}
+                    placeholder="入場受付を一時停止しています。しばらくお待ちください。"
+                    rows={3}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  />
+                </div>
+              )}
+
+              {/* Maintenance Mode Toggle */}
+              <div className="flex items-center justify-between p-4 bg-amber-50 rounded-lg border border-amber-200">
+                <div>
+                  <p className="font-medium text-amber-800">メンテナンスモード</p>
+                  <p className="text-sm text-amber-600">
+                    ONにすると、一般ユーザーはアクセスできなくなります
+                  </p>
+                </div>
+                <button
+                  onClick={() => setEmergencyForm(f => ({ ...f, maintenance_mode: !f.maintenance_mode }))}
+                  className={`relative w-14 h-8 rounded-full transition-colors ${
+                    emergencyForm.maintenance_mode ? "bg-amber-600" : "bg-slate-300"
+                  }`}
+                >
+                  <span 
+                    className={`absolute top-1 left-1 w-6 h-6 bg-white rounded-full transition-transform ${
+                      emergencyForm.maintenance_mode ? "translate-x-6" : ""
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Save Button */}
+              <div className="flex justify-end">
+                <Button
+                  onClick={updateEmergency}
+                  disabled={loading.emergency}
+                  className={emergencyForm.emergency_stop ? "bg-red-600 hover:bg-red-700" : ""}
+                >
+                  {loading.emergency ? (
+                    <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Check className="h-4 w-4 mr-2" />
+                  )}
+                  設定を保存
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Email Settings Tab */}
+        {activeTab === "email" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Mail className="h-5 w-5" />
+                メール設定
+              </h2>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchEmailSettings}
+                disabled={loading.email}
+              >
+                {loading.email ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border p-6 space-y-6">
+              {/* Mode Toggle */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-slate-700">送信モード</label>
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => setEmailForm((f) => ({ ...f, email_mode: "test" }))}
+                    className={`flex-1 p-4 rounded-lg border-2 transition-colors ${
+                      emailForm.email_mode === "test"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="font-medium text-slate-900">テストモード</div>
+                    <div className="text-sm text-slate-500 mt-1">
+                      メールは送信されず、ログに出力されます
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setEmailForm((f) => ({ ...f, email_mode: "production" }))}
+                    className={`flex-1 p-4 rounded-lg border-2 transition-colors ${
+                      emailForm.email_mode === "production"
+                        ? "border-emerald-500 bg-emerald-50"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="font-medium text-slate-900">本番モード</div>
+                    <div className="text-sm text-slate-500 mt-1">
+                      SendGridを使用して実際にメール送信
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* SendGrid API Key (Production Mode Only) */}
+              {emailForm.email_mode === "production" && (
+                <div className="space-y-4 p-4 bg-emerald-50 rounded-lg border border-emerald-200">
+                  <div className="flex items-center gap-2 text-emerald-800 font-medium">
+                    <Key className="h-4 w-4" />
+                    SendGrid設定
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">APIキー</label>
+                    {emailSettings?.sendgrid_api_key_set && (
+                      <div className="text-sm text-slate-500 mb-1">
+                        現在設定済み: {emailSettings.sendgrid_api_key_masked}
+                      </div>
+                    )}
+                    <Input
+                      type="password"
+                      value={emailForm.sendgrid_api_key}
+                      onChange={(e) => setEmailForm((f) => ({ ...f, sendgrid_api_key: e.target.value }))}
+                      placeholder={emailSettings?.sendgrid_api_key_set ? "変更する場合のみ入力" : "SG.xxxxxxxx..."}
+                      className="font-mono"
+                    />
+                    <p className="text-xs text-slate-500">
+                      SendGridダッシュボードから取得したAPIキーを入力してください
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* From Address Settings */}
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">送信元メールアドレス</label>
+                  <Input
+                    type="email"
+                    value={emailForm.email_from_address}
+                    onChange={(e) => setEmailForm((f) => ({ ...f, email_from_address: e.target.value }))}
+                    placeholder="noreply@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">送信元名</label>
+                  <Input
+                    type="text"
+                    value={emailForm.email_from_name}
+                    onChange={(e) => setEmailForm((f) => ({ ...f, email_from_name: e.target.value }))}
+                    placeholder="MATSU イベント管理"
+                  />
+                </div>
+              </div>
+
+              {/* Save Button */}
+              <div className="flex justify-end">
+                <Button
+                  onClick={updateEmailSettings}
+                  disabled={loading.email}
+                >
+                  {loading.email ? (
+                    <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Check className="h-4 w-4 mr-2" />
+                  )}
+                  設定を保存
+                </Button>
+              </div>
+
+              {/* Last Updated Info */}
+              {emailSettings?.updated_at && (
+                <div className="text-sm text-slate-500 border-t pt-4">
+                  最終更新: {new Date(emailSettings.updated_at).toLocaleString("ja-JP")}
+                  {emailSettings.updated_by && ` by ${emailSettings.updated_by}`}
+                </div>
+              )}
+            </div>
+
+            {/* Test Email Section */}
+            <div className="bg-white rounded-lg shadow-sm border p-6 space-y-4">
+              <h3 className="text-md font-semibold flex items-center gap-2">
+                <Mail className="h-4 w-4" />
+                テストメール送信
+              </h3>
+
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-50">
+                <div className={`px-2 py-1 rounded text-xs font-medium ${
+                  emailForm.email_mode === "test" 
+                    ? "bg-blue-100 text-blue-800" 
+                    : "bg-emerald-100 text-emerald-800"
+                }`}>
+                  {emailForm.email_mode === "test" ? "テストモード" : "本番モード"}
+                </div>
+                <span className="text-sm text-slate-600">
+                  {emailForm.email_mode === "test" 
+                    ? "実際には送信されません（ログ出力のみ）" 
+                    : "実際にメールが送信されます"}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  value={testEmailAddress}
+                  onChange={(e) => setTestEmailAddress(e.target.value)}
+                  placeholder="test@example.com"
+                  className="flex-1"
+                />
+                <Button
+                  onClick={sendTestEmail}
+                  disabled={loading.emailTest || !testEmailAddress}
+                  variant="outline"
+                >
+                  {loading.emailTest ? (
+                    <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Mail className="h-4 w-4 mr-2" />
+                  )}
+                  送信テスト
+                </Button>
               </div>
             </div>
           </div>

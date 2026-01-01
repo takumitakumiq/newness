@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,10 @@ import {
   Keyboard,
   User,
   Calendar,
-  Ticket
+  Ticket,
+  Volume2,
+  VolumeX,
+  AlertTriangle
 } from "lucide-react";
 
 interface CheckInResult {
@@ -42,6 +45,60 @@ interface RecentCheckIn {
   success: boolean;
 }
 
+// 二重スキャン防止のキャッシュ（5秒間）
+const DUPLICATE_SCAN_THRESHOLD_MS = 5000;
+const recentScans = new Map<string, number>();
+
+// デバイスID生成・取得（端末識別用）
+const getDeviceId = (): string => {
+  const storageKey = "matsu_device_id";
+  let deviceId = localStorage.getItem(storageKey);
+  if (!deviceId) {
+    deviceId = `device-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem(storageKey, deviceId);
+  }
+  return deviceId;
+};
+
+// 音声ファイルのURL（Web Audio APIで生成するため実際のファイルは不要）
+const playBeep = (success: boolean) => {
+  try {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    if (success) {
+      // 成功音: 高い音を短く2回
+      oscillator.frequency.value = 1000;
+      gainNode.gain.value = 0.3;
+      oscillator.start();
+      setTimeout(() => oscillator.stop(), 100);
+    } else {
+      // 失敗音: 低い音を長く1回
+      oscillator.frequency.value = 300;
+      gainNode.gain.value = 0.3;
+      oscillator.start();
+      setTimeout(() => oscillator.stop(), 300);
+    }
+  } catch (e) {
+    console.warn("Audio playback failed:", e);
+  }
+};
+
+// バイブレーション
+const vibrate = (success: boolean) => {
+  if ("vibrate" in navigator) {
+    if (success) {
+      navigator.vibrate([100, 50, 100]); // 成功: 短く2回
+    } else {
+      navigator.vibrate([500]); // 失敗: 長く1回
+    }
+  }
+};
+
 export default function ScanPage() {
   const [mode, setMode] = useState<"camera" | "manual">("manual");
   const [manualId, setManualId] = useState("");
@@ -50,8 +107,32 @@ export default function ScanPage() {
   const [recentCheckIns, setRecentCheckIns] = useState<RecentCheckIn[]>([]);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [emergencyStop, setEmergencyStop] = useState(false);
+  const [emergencyMessage, setEmergencyMessage] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // 緊急停止状態のチェック
+  useEffect(() => {
+    const checkEmergency = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+        const res = await fetch(`${apiUrl}/api/emergency-status/`);
+        if (res.ok) {
+          const data = await res.json();
+          setEmergencyStop(data.emergency_stop);
+          setEmergencyMessage(data.emergency_message || "緊急停止中です");
+        }
+      } catch (e) {
+        console.error("Emergency check failed:", e);
+      }
+    };
+    
+    checkEmergency();
+    const interval = setInterval(checkEmergency, 10000); // 10秒ごとにチェック
+    return () => clearInterval(interval);
+  }, []);
 
   // Start camera
   const startCamera = async () => {
@@ -80,15 +161,59 @@ export default function ScanPage() {
     setScanning(false);
   };
 
+  // 二重スキャン防止チェック
+  const isDuplicateScan = useCallback((ticketId: string): boolean => {
+    const now = Date.now();
+    const lastScan = recentScans.get(ticketId);
+    
+    // 古いエントリを削除
+    const keysToDelete: string[] = [];
+    recentScans.forEach((timestamp, id) => {
+      if (now - timestamp > DUPLICATE_SCAN_THRESHOLD_MS) {
+        keysToDelete.push(id);
+      }
+    });
+    keysToDelete.forEach(id => recentScans.delete(id));
+    
+    if (lastScan && now - lastScan < DUPLICATE_SCAN_THRESHOLD_MS) {
+      return true;
+    }
+    
+    recentScans.set(ticketId, now);
+    return false;
+  }, []);
+
   // Check-in API call
   const performCheckIn = async (ticketId: string) => {
+    // 緊急停止中はチェックイン不可
+    if (emergencyStop) {
+      setResult({
+        success: false,
+        message: emergencyMessage || "緊急停止中のためチェックインできません",
+      });
+      if (soundEnabled) playBeep(false);
+      vibrate(false);
+      return;
+    }
+    
+    // 二重スキャン防止
+    if (isDuplicateScan(ticketId)) {
+      setResult({
+        success: false,
+        message: "このチケットは直前にスキャンされました（5秒以内の再スキャン防止）",
+      });
+      if (soundEnabled) playBeep(false);
+      vibrate(false);
+      return;
+    }
+    
     setLoading(true);
     setResult(null);
     
     try {
       const token = localStorage.getItem("access_token");
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/checkin`, {
+      const res = await fetch(`${apiUrl}/api/checkin/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -96,13 +221,17 @@ export default function ScanPage() {
         },
         body: JSON.stringify({
           ticket_uuid: ticketId,
-          device_id: "staff-web",
+          device_id: getDeviceId(),
           operator: "staff",
         }),
       });
 
       const data: CheckInResult = await res.json();
       setResult(data);
+
+      // 音とバイブレーション
+      if (soundEnabled) playBeep(data.success);
+      vibrate(data.success);
 
       // Add to recent check-ins
       const newCheckIn: RecentCheckIn = {
@@ -116,10 +245,13 @@ export default function ScanPage() {
       
     } catch (error) {
       console.error("Check-in error:", error);
-      setResult({
+      const errorResult = {
         success: false,
         message: "通信エラーが発生しました。ネットワーク接続を確認してください。",
-      });
+      };
+      setResult(errorResult);
+      if (soundEnabled) playBeep(false);
+      vibrate(false);
     } finally {
       setLoading(false);
     }
@@ -152,9 +284,32 @@ export default function ScanPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">入場受付</h1>
-        <p className="text-gray-500 mt-1">QRコードをスキャンまたはチケットIDを入力</p>
+      {/* 緊急停止バナー */}
+      {emergencyStop && (
+        <div className="bg-red-600 text-white p-4 rounded-lg flex items-center gap-3">
+          <AlertTriangle className="h-6 w-6 flex-shrink-0" />
+          <div>
+            <p className="font-bold">緊急停止中</p>
+            <p className="text-sm">{emergencyMessage}</p>
+          </div>
+        </div>
+      )}
+      
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">入場受付</h1>
+          <p className="text-gray-500 mt-1">QRコードをスキャンまたはチケットIDを入力</p>
+        </div>
+        
+        {/* 音声ON/OFFボタン */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setSoundEnabled(!soundEnabled)}
+          className={soundEnabled ? "text-green-600" : "text-gray-400"}
+        >
+          {soundEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
+        </Button>
       </div>
 
       {/* Mode Toggle */}
