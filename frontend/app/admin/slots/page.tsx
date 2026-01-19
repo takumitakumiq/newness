@@ -23,6 +23,18 @@ export default function SlotsPage() {
   const [editing, setEditing] = useState<Slot | null>(null);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ event_date: "", start_time: "", end_time: "", capacity: 50, is_active: true });
+  const [notice, setNotice] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const getErrorMessage = (e: any) => {
+    if (typeof e?.message === "string") return e.message;
+    if (typeof e?.detail === "string") return e.detail;
+    if (Array.isArray(e?.errors)) return e.errors.join("\n");
+    if (e?.errors && typeof e.errors === "object") {
+      const first = Object.values(e.errors)[0] as any;
+      if (Array.isArray(first)) return String(first[0]);
+    }
+    return "エラーが発生しました";
+  };
 
   const fetchSlots = async () => {
     setLoading(true);
@@ -42,31 +54,45 @@ export default function SlotsPage() {
         body: JSON.stringify({ is_active: !slot.is_active }),
       });
       fetchSlots();
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
+      setNotice({ type: "success", message: "予約受付の状態を更新しました" });
+    } catch (e) {
+      console.error(e);
+      setNotice({ type: "error", message: getErrorMessage(e) });
+    }
   };
 
   const saveSlot = async () => {
     try {
       const isEditing = editing !== null;
+      const payload = {
+        ...form,
+        capacity: Number(form.capacity),
+        is_active: form.is_active,
+        end_time: form.end_time ? form.end_time : null,
+      };
       await fetchApi(isEditing ? `/slots/${editing.id}` : "/slots", {
         method: isEditing ? "PATCH" : "POST",
-        body: JSON.stringify({
-          ...form,
-          capacity: Number(form.capacity),
-          is_active: form.is_active,
-        }),
+        body: JSON.stringify(payload),
       });
       fetchSlots();
       closeModal();
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
+      setNotice({ type: "success", message: isEditing ? "時間枠を更新しました" : "時間枠を作成しました" });
+    } catch (e) {
+      console.error(e);
+      setNotice({ type: "error", message: getErrorMessage(e) });
+    }
   };
 
   const deleteSlot = async (id: string) => {
     if (!confirm("この時間枠を削除しますか？")) return;
     try {
-      await fetchApi(`/slots/${id}`, { method: "DELETE" });
+      const res = await fetchApi<{ message?: string; soft_deleted?: boolean }>(`/slots/${id}`, { method: "DELETE" });
       fetchSlots();
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
+      setNotice({ type: "success", message: res?.message || "時間枠を削除しました" });
+    } catch (e) {
+      console.error(e);
+      setNotice({ type: "error", message: getErrorMessage(e) });
+    }
   };
 
   const closeModal = () => {
@@ -107,6 +133,12 @@ export default function SlotsPage() {
           <Button variant="outline" size="icon" onClick={fetchSlots}><RefreshCw className="h-4 w-4" /></Button>
         </div>
       </div>
+
+      {notice && (
+        <div className={`rounded-xl border p-3 text-sm ${notice.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-rose-50 border-rose-200 text-rose-900"}`}>
+          {notice.message}
+        </div>
+      )}
 
       {/* Create/Edit Modal */}
       {(creating || editing) && (

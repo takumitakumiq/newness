@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { LogIn, UserPlus, Sparkles, Loader2 } from "lucide-react";
+import { LogIn, UserPlus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -74,9 +74,11 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-3 mb-4">
-            <div className="p-3 rounded-xl bg-festival-neon/20">
-              <Sparkles className="h-8 w-8 text-festival-neon" />
-            </div>
+            <img
+              src="/matsu-logo.svg"
+              alt="MATSU ロゴ"
+              className="h-10 w-10 rounded-md bg-white p-1 border border-slate-200"
+            />
             <div className="text-left">
               <h1 className="text-2xl font-bold">MATSU</h1>
               <p className="text-sm text-muted-foreground">洛星文化祭チケット</p>

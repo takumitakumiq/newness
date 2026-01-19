@@ -8,7 +8,8 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_datetime, parse_date
+from datetime import datetime, time
 from django.shortcuts import render
 from django.views import View
 from django.contrib.admin.views.decorators import staff_member_required
@@ -1737,8 +1738,18 @@ class AdminAuditSearchView(APIView):
         if denied:
             return denied
 
-        start = parse_datetime(request.query_params.get('from'))
-        end = parse_datetime(request.query_params.get('to'))
+        raw_start = request.query_params.get('from')
+        raw_end = request.query_params.get('to')
+        start = parse_datetime(raw_start) if raw_start else None
+        end = parse_datetime(raw_end) if raw_end else None
+        if not start and raw_start:
+            start_date = parse_date(raw_start)
+            if start_date:
+                start = timezone.make_aware(datetime.combine(start_date, time.min))
+        if not end and raw_end:
+            end_date = parse_date(raw_end)
+            if end_date:
+                end = timezone.make_aware(datetime.combine(end_date, time.max))
         actor = request.query_params.get('actor')
         user_id = request.query_params.get('user_id')
         ticket_id = request.query_params.get('ticket_id')
@@ -1940,11 +1951,33 @@ class AdminSupportSearchView(APIView):
         if not reservation and user:
             reservation = Reservation.objects.filter(user=user).order_by('-created_at').first()
 
-        reservations = Reservation.objects.filter(user=user).prefetch_related('tickets').order_by('-created_at') if user else []
-        tickets = Ticket.objects.filter(reservation__user=user).select_related('slot', 'attribute', 'reservation') if user else []
-        checkins = CheckInLog.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50] if user else []
-        share_links = TicketShareLink.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50] if user else []
-        email_logs = EmailDeliveryLog.objects.filter(reservation__user=user).order_by('-created_at')[:50] if user else []
+        if not reservation and not user:
+            reservation = Reservation.objects.filter(
+                models.Q(user_email__icontains=query) |
+                models.Q(guest_identifier__icontains=query) |
+                models.Q(user_name__icontains=query)
+            ).order_by('-created_at').first()
+            if reservation and reservation.user:
+                user = reservation.user
+
+        if user:
+            reservations = Reservation.objects.filter(user=user).prefetch_related('tickets').order_by('-created_at')
+            tickets = Ticket.objects.filter(reservation__user=user).select_related('slot', 'attribute', 'reservation')
+            checkins = CheckInLog.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50]
+            share_links = TicketShareLink.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50]
+            email_logs = EmailDeliveryLog.objects.filter(reservation__user=user).order_by('-created_at')[:50]
+        elif reservation:
+            reservations = [reservation]
+            tickets = Ticket.objects.filter(reservation=reservation).select_related('slot', 'attribute', 'reservation')
+            checkins = CheckInLog.objects.filter(ticket__reservation=reservation).order_by('-created_at')[:50]
+            share_links = TicketShareLink.objects.filter(ticket__reservation=reservation).order_by('-created_at')[:50]
+            email_logs = EmailDeliveryLog.objects.filter(reservation=reservation).order_by('-created_at')[:50]
+        else:
+            reservations = []
+            tickets = []
+            checkins = []
+            share_links = []
+            email_logs = []
 
         profile = None
         if user:
@@ -2118,9 +2151,7 @@ class AdminBulkOperationView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request):
-        denied = _require_any_group(request, ["admin_bulk", GROUP_ADMIN_OPS])
-        if denied:
-            return denied
+        return Response({"success": False, "message": "一括オペレーションは利用停止中です"}, status=status.HTTP_403_FORBIDDEN)
 
         action = request.data.get("action")
         if action == "close_entry":

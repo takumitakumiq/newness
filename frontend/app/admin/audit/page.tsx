@@ -30,9 +30,17 @@ export default function AdminAuditPage() {
   });
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const getErrorMessage = (e: any) => {
+    if (typeof e?.message === "string") return e.message;
+    if (typeof e?.detail === "string") return e.detail;
+    return "監査ログの取得に失敗しました";
+  };
 
   const fetchLogs = async () => {
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => {
@@ -42,6 +50,7 @@ export default function AdminAuditPage() {
       setLogs(data.logs || []);
     } catch (e) {
       console.error("Failed to fetch audit logs", e);
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -52,14 +61,20 @@ export default function AdminAuditPage() {
     Object.entries(filters).forEach(([k, v]) => {
       if (v) params.append(k, v);
     });
-    const res = await fetchApiRaw(`/admin/audit/export?${params.toString()}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `audit_${new Date().toISOString()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      setError(null);
+      const res = await fetchApiRaw(`/admin/audit/export?${params.toString()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit_${new Date().toISOString()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Failed to export audit logs", e);
+      setError(getErrorMessage(e));
+    }
   };
 
   return (
@@ -99,6 +114,12 @@ export default function AdminAuditPage() {
           <option value="share">共有リンク</option>
         </select>
       </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-3 text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <table className="min-w-full text-sm">

@@ -88,7 +88,6 @@ export default function AdminLayout({
     { href: "/admin/announcements", label: "お知らせ", icon: MessageSquare },
     { href: "/admin/audit", label: "監査ログ", icon: FileText },
     { href: "/admin/support", label: "サポート", icon: LifeBuoy },
-    { href: "/admin/bulk", label: "一括オペ", icon: Layers },
     { href: "/admin/system", label: "システム管理", icon: Wrench },
   ];
 

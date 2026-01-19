@@ -23,10 +23,23 @@ export default function AdminSupportPage() {
   const [note, setNote] = useState("");
   const [verification, setVerification] = useState("unverified");
   const [verificationNote, setVerificationNote] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const getErrorMessage = (e: any) => {
+    if (typeof e?.message === "string") return e.message;
+    if (typeof e?.detail === "string") return e.detail;
+    return "サポート検索に失敗しました";
+  };
 
   const search = async () => {
     setLoading(true);
+    setError(null);
     try {
+      if (query.trim().length < 2) {
+        setError("検索条件は2文字以上で入力してください");
+        setData(null);
+        return;
+      }
       const res = await fetchApi<SupportResult>(`/admin/support/search?q=${encodeURIComponent(query)}`);
       setData(res);
       setNote(res.profile?.support_note || "");
@@ -34,17 +47,24 @@ export default function AdminSupportPage() {
       setVerificationNote(res.profile?.verification_note || "");
     } catch (e) {
       console.error("support search failed", e);
+      setError(getErrorMessage(e));
     } finally {
       setLoading(false);
     }
   };
 
   const doAction = async (payload: Record<string, any>) => {
-    await fetchApi("/admin/support/action", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    await search();
+    try {
+      setError(null);
+      await fetchApi("/admin/support/action", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      await search();
+    } catch (e) {
+      console.error("support action failed", e);
+      setError(getErrorMessage(e));
+    }
   };
 
   return (
@@ -63,6 +83,12 @@ export default function AdminSupportPage() {
           検索
         </Button>
       </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-900 rounded-xl p-3 text-sm">
+          {error}
+        </div>
+      )}
 
       {data?.user && (
         <div className="grid md:grid-cols-2 gap-4">
@@ -108,6 +134,21 @@ export default function AdminSupportPage() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {data && !data.user && data.reservations && data.reservations.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+          <h3 className="font-semibold text-slate-900">予約情報</h3>
+          <div className="space-y-2 text-sm">
+            {data.reservations.map((r) => (
+              <div key={r.id} className="border rounded-lg px-3 py-2">
+                <div className="font-medium text-slate-900">{r.id}</div>
+                <div className="text-slate-500">{r.user_name || "(名前未設定)"} / {r.user_email || "(メール未設定)"}</div>
+                <div className="text-slate-500">チケット数: {r.total_tickets}</div>
+              </div>
+            ))}
           </div>
         </div>
       )}
