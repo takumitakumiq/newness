@@ -80,8 +80,13 @@ export default function StaffLayout({
             >
               {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
             </button>
-            <Link href="/staff" className="text-xl font-bold text-indigo-600">
-              🎪 MATSU Staff
+            <Link href="/staff" className="flex items-center gap-2 text-xl font-bold text-indigo-600">
+              <img
+                src="/matsu-logo.svg"
+                alt="MATSU ロゴ"
+                className="h-8 w-8 rounded-md bg-white p-0.5 border border-slate-200"
+              />
+              <span>MATSU Staff</span>
             </Link>
           </div>
           <div className="flex items-center gap-4">

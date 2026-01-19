@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Ticket, Sparkles, ArrowRight, LogOut, User, AlertTriangle, Info, AlertCircle, Sun, Moon, ShieldCheck, Timer, BadgeCheck, HelpCircle, Smartphone, MapPin, CheckCircle } from "lucide-react";
+import { Ticket, ArrowRight, LogOut, User, AlertTriangle, Info, AlertCircle, Sun, Moon, ShieldCheck, Timer, BadgeCheck, HelpCircle, Smartphone, MapPin, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TimeSlotPicker } from "@/components/TimeSlotPicker";
 import { AttributeSelector } from "@/components/AttributeSelector";
@@ -178,9 +178,11 @@ export default function HomePage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-festival-neon/20">
-                <Sparkles className="h-6 w-6 text-festival-neon" />
-              </div>
+              <img
+                src="/matsu-logo.svg"
+                alt="MATSU ロゴ"
+                className="h-9 w-9 rounded-md bg-white p-1 border border-slate-200"
+              />
               <div>
                 <h1 className="text-xl font-bold">MATSU</h1>
                 <p className="text-xs text-muted-foreground">洛星文化祭チケット</p>

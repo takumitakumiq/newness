@@ -105,9 +105,11 @@ export default function AdminLayout({
               {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
             <Link href="/admin/dashboard" className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-slate-900 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-xs">M</span>
-              </div>
+              <img
+                src="/matsu-logo.svg"
+                alt="MATSU ロゴ"
+                className="h-7 w-7 rounded-md bg-white p-0.5 border border-slate-200"
+              />
               <span className="text-base font-semibold text-slate-900 hidden sm:inline">MATSU</span>
             </Link>
           </div>

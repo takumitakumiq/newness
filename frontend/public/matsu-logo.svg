@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="640px" height="640px" viewBox="0 0 640 640" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>matsu-logo</title>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Group">
+            <rect id="Rectangle-Copy-2" fill="#FFFFFF" x="0" y="2.27373675e-13" width="640" height="640"></rect>
+            <g id="Group-14" transform="translate(45, 0)">
+                <polygon id="Fill-1" fill="#485BB3" points="0 160 275.910416 640 550.967742 160"></polygon>
+                <polygon id="Fill-2" fill="#FEFEFE" points="0 481.290323 184.516129 481.290323 91.9599865 320"></polygon>
+                <polygon id="Stroke-3" fill="#C59C00" points="91.9599865 320 0 481.290323 184.516129 481.290323"></polygon>
+                <polygon id="Fill-5" fill="#FEFEFE" points="366.451613 481.290323 550.967742 481.290323 458.709677 321.290323"></polygon>
+                <polygon id="Stroke-6" fill="#C59C00" points="366.451613 481.290323 550.967742 481.290323 458.709677 321.290323"></polygon>
+                <polygon id="Fill-7" fill="#C59C00" points="274.692779 2.27773746e-13 172.903226 178.064516 376.774194 178.064516"></polygon>
+            </g>
+        </g>
+    </g>
+</svg>
