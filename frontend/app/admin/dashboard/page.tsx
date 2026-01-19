@@ -125,7 +125,7 @@ export default function AdminDashboard() {
         {/* Line Chart */}
         <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-4">
           <h3 className="font-semibold text-slate-900 mb-4">売上推移</h3>
-          <div className="h-64">
+          <div className="h-48 sm:h-56 md:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={data.sales_trend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
@@ -141,7 +141,7 @@ export default function AdminDashboard() {
         {/* Pie Chart */}
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <h3 className="font-semibold text-slate-900 mb-4">券種別</h3>
-          <div className="h-64">
+          <div className="h-48 sm:h-56 md:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -235,7 +235,7 @@ export default function AdminDashboard() {
       {/* Bar Chart */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">
         <h3 className="font-semibold text-slate-900 mb-4">時間枠別販売数</h3>
-        <div className="h-64">
+        <div className="h-48 sm:h-56 md:h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data.by_slot}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />

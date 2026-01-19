@@ -385,10 +385,10 @@ export default function ScanPage() {
         </div>
       )}
       
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">入場受付</h1>
-          <p className="text-gray-500 mt-1">QRコードをスキャンまたはチケットIDを入力</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">入場受付</h1>
+          <p className="text-sm text-gray-500 mt-1">QRコードをスキャンまたはチケットIDを入力</p>
         </div>
         
         {/* 音声ON/OFFボタン */}
@@ -419,7 +419,7 @@ export default function ScanPage() {
         <Button
           variant={mode === "camera" ? "default" : "outline"}
           onClick={() => setMode("camera")}
-          className="flex-1"
+          className="flex-1 h-10 sm:h-11"
         >
           <Camera className="mr-2 h-4 w-4" />
           カメラスキャン
@@ -427,14 +427,14 @@ export default function ScanPage() {
         <Button
           variant={mode === "manual" ? "default" : "outline"}
           onClick={() => setMode("manual")}
-          className="flex-1"
+          className="flex-1 h-10 sm:h-11"
         >
           <Keyboard className="mr-2 h-4 w-4" />
           手動入力
         </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         {/* Scanner / Input Area */}
         <Card className="bg-white border-gray-200">
           <CardHeader>
