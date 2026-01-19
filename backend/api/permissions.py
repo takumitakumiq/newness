@@ -44,3 +44,13 @@ class ChatThrottle(UserRateThrottle):
 class CheckInThrottle(UserRateThrottle):
     """チェックイン用のレート制限: 1分に60回まで"""
     scope = 'checkin'
+
+
+class ShareAccessThrottle(UserRateThrottle):
+    """共有リンク閲覧のレート制限"""
+    scope = 'share'
+
+
+class EmailOpsThrottle(UserRateThrottle):
+    """メール送信操作のレート制限"""
+    scope = 'email_ops'

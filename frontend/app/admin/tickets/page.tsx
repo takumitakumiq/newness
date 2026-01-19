@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, RefreshCw, ChevronLeft, ChevronRight, QrCode, Edit2, X, Check } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface Ticket {
   id: string;
@@ -21,24 +22,17 @@ export default function TicketsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "valid" | "entered" | "cancelled">("all");
+  const [dateFilter, setDateFilter] = useState<string>("");
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<Ticket | null>(null);
   const [editForm, setEditForm] = useState({ status: "", guest_name: "" });
   const pageSize = 20;
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-  const getToken = () => localStorage.getItem("access_token");
-
   const fetchTickets = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/tickets/`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTickets(Array.isArray(data) ? data : data.results || []);
-      }
+      const data = await fetchApi<{ results: Ticket[] } | Ticket[]>("/tickets");
+      setTickets(Array.isArray(data) ? data : data.results || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -50,17 +44,12 @@ export default function TicketsPage() {
       if (editForm.guest_name) {
         body.guest_info = { ...editing.guest_info, name: editForm.guest_name };
       }
-      const res = await fetch(`${apiUrl}/api/tickets/${editing.id}/`, {
+      await fetchApi(`/tickets/${editing.id}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (res.ok) {
-        fetchTickets();
-        setEditing(null);
-      } else {
-        alert("更新に失敗しました");
-      }
+      fetchTickets();
+      setEditing(null);
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
   };
 
@@ -76,7 +65,8 @@ export default function TicketsPage() {
       t.id?.toLowerCase().includes(search.toLowerCase()) ||
       t.guest_info?.name?.toLowerCase().includes(search.toLowerCase());
     const matchStatus = statusFilter === "all" || t.status === statusFilter;
-    return matchSearch && matchStatus;
+    const matchDate = !dateFilter || t.slot_detail?.event_date === dateFilter;
+    return matchSearch && matchStatus && matchDate;
   });
 
   const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -124,10 +114,13 @@ export default function TicketsPage() {
         ))}
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-        <Input placeholder="ID・名前で検索..." className="pl-9" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+      {/* Filters */}
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input placeholder="ID・名前で検索..." className="pl-9" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+        </div>
+        <Input type="date" value={dateFilter} onChange={(e) => { setDateFilter(e.target.value); setPage(1); }} />
       </div>
 
       {/* Table */}

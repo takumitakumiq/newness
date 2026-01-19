@@ -16,7 +16,10 @@ import {
   MessageSquare,
   Calendar,
   Shield,
-  Wrench
+  Wrench,
+  FileText,
+  LifeBuoy,
+  Layers
 } from "lucide-react";
 
 export default function AdminLayout({
@@ -83,6 +86,9 @@ export default function AdminLayout({
     { href: "/admin/attributes", label: "種別・フォーム", icon: Ticket },
     { href: "/admin/statistics", label: "統計", icon: BarChart3 },
     { href: "/admin/announcements", label: "お知らせ", icon: MessageSquare },
+    { href: "/admin/audit", label: "監査ログ", icon: FileText },
+    { href: "/admin/support", label: "サポート", icon: LifeBuoy },
+    { href: "/admin/bulk", label: "一括オペ", icon: Layers },
     { href: "/admin/system", label: "システム管理", icon: Wrench },
   ];
 

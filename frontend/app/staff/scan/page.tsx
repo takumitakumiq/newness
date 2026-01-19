@@ -19,6 +19,7 @@ import {
   VolumeX,
   AlertTriangle
 } from "lucide-react";
+import { fetchApi, fetchApiRaw } from "@/lib/api";
 
 interface CheckInResult {
   success: boolean;
@@ -48,6 +49,23 @@ interface RecentCheckIn {
 // 二重スキャン防止のキャッシュ（5秒間）
 const DUPLICATE_SCAN_THRESHOLD_MS = 5000;
 const recentScans = new Map<string, number>();
+
+const QUEUE_STORAGE_KEY = "matsu_checkin_queue";
+
+const loadQueue = (): { ticket_uuid: string; device_id: string; scanned_at: string }[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(QUEUE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveQueue = (queue: { ticket_uuid: string; device_id: string; scanned_at: string }[]) => {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
+};
 
 // デバイスID生成・取得（端末識別用）
 const getDeviceId = (): string => {
@@ -110,20 +128,24 @@ export default function ScanPage() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [emergencyStop, setEmergencyStop] = useState(false);
   const [emergencyMessage, setEmergencyMessage] = useState("");
+  const [queue, setQueue] = useState(loadQueue());
+  const [syncing, setSyncing] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const manualInputRef = useRef<HTMLInputElement>(null);
+  const scannerBufferRef = useRef("");
+  const scannerTimerRef = useRef<number | null>(null);
 
   // 緊急停止状態のチェック
   useEffect(() => {
     const checkEmergency = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-        const res = await fetch(`${apiUrl}/api/emergency-status/`);
-        if (res.ok) {
-          const data = await res.json();
-          setEmergencyStop(data.emergency_stop);
-          setEmergencyMessage(data.emergency_message || "緊急停止中です");
-        }
+        const data = await fetchApi<{ emergency_stop: boolean; emergency_message?: string }>(
+          "/emergency-status",
+          { auth: false }
+        );
+        setEmergencyStop(data.emergency_stop);
+        setEmergencyMessage(data.emergency_message || "緊急停止中です");
       } catch (e) {
         console.error("Emergency check failed:", e);
       }
@@ -133,6 +155,10 @@ export default function ScanPage() {
     const interval = setInterval(checkEmergency, 10000); // 10秒ごとにチェック
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    saveQueue(queue);
+  }, [queue]);
 
   // Start camera
   const startCamera = async () => {
@@ -211,19 +237,15 @@ export default function ScanPage() {
     setResult(null);
     
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/checkin/`, {
+      const res = await fetchApiRaw("/checkin", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ticket_uuid: ticketId,
           device_id: getDeviceId(),
           operator: "staff",
         }),
+        throwOnError: false,
       });
 
       const data: CheckInResult = await res.json();
@@ -245,6 +267,12 @@ export default function ScanPage() {
       
     } catch (error) {
       console.error("Check-in error:", error);
+      const queuedItem = {
+        ticket_uuid: ticketId,
+        device_id: getDeviceId(),
+        scanned_at: new Date().toISOString(),
+      };
+      setQueue(prev => [...prev, queuedItem]);
       const errorResult = {
         success: false,
         message: "通信エラーが発生しました。ネットワーク接続を確認してください。",
@@ -257,13 +285,48 @@ export default function ScanPage() {
     }
   };
 
+  const syncQueue = async () => {
+    if (queue.length === 0) return;
+    setSyncing(true);
+    try {
+      const res = await fetchApiRaw("/checkin/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checkins: queue }),
+      });
+      if (res.ok) {
+        setQueue([]);
+      }
+    } catch (e) {
+      console.error("Batch sync failed", e);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Handle manual input
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (manualId.trim()) {
-      performCheckIn(manualId.trim());
+    const extracted = extractTicketId(manualId);
+    if (extracted) {
+      performCheckIn(extracted);
       setManualId("");
     }
+  };
+
+  const extractTicketId = (raw: string): string | null => {
+    const text = raw.trim();
+    if (!text) return null;
+    try {
+      const url = new URL(text);
+      const fromQuery = url.searchParams.get("ticket_uuid") || url.searchParams.get("ticket") || url.searchParams.get("id");
+      if (fromQuery) return fromQuery;
+      const maybeUuid = url.pathname.split("/").filter(Boolean).pop();
+      if (maybeUuid && /^[0-9a-fA-F-]{32,36}$/.test(maybeUuid)) return maybeUuid;
+    } catch {
+      // not a URL
+    }
+    return text;
   };
 
   // Cleanup on unmount
@@ -279,7 +342,34 @@ export default function ScanPage() {
       startCamera();
     } else {
       stopCamera();
+      manualInputRef.current?.focus();
     }
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "manual") return;
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        const buffer = scannerBufferRef.current.trim();
+        if (buffer) {
+          const extracted = extractTicketId(buffer);
+          if (extracted) performCheckIn(extracted);
+          scannerBufferRef.current = "";
+          setManualId("");
+        }
+        return;
+      }
+      if (e.key.length === 1) {
+        scannerBufferRef.current += e.key;
+        setManualId(scannerBufferRef.current);
+        if (scannerTimerRef.current) window.clearTimeout(scannerTimerRef.current);
+        scannerTimerRef.current = window.setTimeout(() => {
+          scannerBufferRef.current = "";
+        }, 200);
+      }
+    };
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
   }, [mode]);
 
   return (
@@ -311,6 +401,18 @@ export default function ScanPage() {
           {soundEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
         </Button>
       </div>
+
+      {queue.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center justify-between">
+          <div className="text-sm text-amber-800">
+            オフラインキュー: {queue.length} 件
+          </div>
+          <Button size="sm" variant="outline" onClick={syncQueue} disabled={syncing}>
+            {syncing ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            同期
+          </Button>
+        </div>
+      )}
 
       {/* Mode Toggle */}
       <div className="flex gap-2">
@@ -394,6 +496,7 @@ export default function ScanPage() {
               <form onSubmit={handleManualSubmit} className="space-y-4">
                 <div>
                   <Input
+                    ref={manualInputRef}
                     placeholder="チケットID（UUID）を入力"
                     value={manualId}
                     onChange={(e) => setManualId(e.target.value)}
@@ -401,6 +504,9 @@ export default function ScanPage() {
                     disabled={loading}
                   />
                 </div>
+                <p className="text-xs text-gray-500">
+                  USBバーコードリーダーを接続してQRを読み取ると自動入力されます。
+                </p>
                 <Button type="submit" className="w-full" disabled={loading || !manualId.trim()}>
                   {loading ? (
                     <>

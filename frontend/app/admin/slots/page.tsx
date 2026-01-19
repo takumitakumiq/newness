@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Calendar, Clock, Users, RefreshCw, Edit2, Plus, X, Check, ToggleLeft, ToggleRight, Trash2 } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface Slot {
   id: string;
@@ -24,19 +25,11 @@ export default function SlotsPage() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ event_date: "", start_time: "", end_time: "", capacity: 50, is_available: true });
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-  const getToken = () => localStorage.getItem("access_token");
-
   const fetchSlots = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/slots/`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSlots(Array.isArray(data) ? data : data.results || []);
-      }
+      const data = await fetchApi<{ results: Slot[] } | Slot[]>("/slots");
+      setSlots(Array.isArray(data) ? data : data.results || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -45,48 +38,35 @@ export default function SlotsPage() {
 
   const toggleAvailability = async (slot: Slot) => {
     try {
-      const res = await fetch(`${apiUrl}/api/slots/${slot.id}/`, {
+      await fetchApi(`/slots/${slot.id}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
         body: JSON.stringify({ is_available: !slot.is_available }),
       });
-      if (res.ok) fetchSlots();
-      else alert("更新に失敗しました");
+      fetchSlots();
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
   };
 
   const saveSlot = async () => {
     try {
       const isEditing = editing !== null;
-      const url = isEditing ? `${apiUrl}/api/slots/${editing.id}/` : `${apiUrl}/api/slots/`;
-      const res = await fetch(url, {
+      await fetchApi(isEditing ? `/slots/${editing.id}` : "/slots", {
         method: isEditing ? "PATCH" : "POST",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
           capacity: Number(form.capacity),
           is_active: true,
         }),
       });
-      if (res.ok) {
-        fetchSlots();
-        closeModal();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        alert("保存に失敗しました: " + JSON.stringify(err));
-      }
+      fetchSlots();
+      closeModal();
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
   };
 
   const deleteSlot = async (id: string) => {
     if (!confirm("この時間枠を削除しますか？")) return;
     try {
-      const res = await fetch(`${apiUrl}/api/slots/${id}/`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) fetchSlots();
-      else alert("削除に失敗しました");
+      await fetchApi(`/slots/${id}`, { method: "DELETE" });
+      fetchSlots();
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
   };
 

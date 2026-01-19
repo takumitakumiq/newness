@@ -30,6 +30,7 @@ import {
   User,
   AlertOctagon,
 } from "lucide-react";
+import { fetchApi, fetchApiRaw } from "@/lib/api";
 
 interface HealthCheck {
   timestamp: string;
@@ -67,10 +68,27 @@ interface Backup {
   created_at: string;
 }
 
+interface AdminAuditLog {
+  id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  metadata: Record<string, any>;
+  actor: string | null;
+  created_at: string;
+}
+
+interface SettingHistory {
+  id: string;
+  action: string;
+  created_by: string | null;
+  created_at: string;
+  snapshot: Record<string, any>;
+}
+
 interface CleanupPreview {
   preview: {
     old_chat_messages: number;
-    expired_transfers: number;
     old_checkin_logs: number;
   };
 }
@@ -104,6 +122,7 @@ interface EmergencySettings {
   emergency_stop: boolean;
   emergency_message: string;
   maintenance_mode: boolean;
+  operation_mode: "normal" | "read_only" | "purchase_stop" | "checkin_only";
   updated_at: string | null;
   updated_by: string | null;
 }
@@ -123,12 +142,15 @@ export default function SystemPage() {
   const [backups, setBackups] = useState<Backup[]>([]);
   const [cleanup, setCleanup] = useState<CleanupPreview | null>(null);
   const [users, setUsers] = useState<UserData[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AdminAuditLog[]>([]);
+  const [settingHistories, setSettingHistories] = useState<SettingHistory[]>([]);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [emergency, setEmergency] = useState<EmergencySettings | null>(null);
   const [emergencyForm, setEmergencyForm] = useState({
     emergency_stop: false,
     emergency_message: "",
     maintenance_mode: false,
+    operation_mode: "normal" as "normal" | "read_only" | "purchase_stop" | "checkin_only",
   });
   const [userForm, setUserForm] = useState<UserEditForm>({
     username: "",
@@ -154,38 +176,21 @@ export default function SystemPage() {
     backup: false,
     cleanup: false,
     users: false,
+    audit: false,
+    settingsHistory: false,
     export: false,
     cache: false,
     emergency: false,
     email: false,
     emailTest: false,
   });
-  const [activeTab, setActiveTab] = useState<"health" | "backup" | "users" | "cleanup" | "export" | "emergency" | "email">("health");
-
-  const getToken = () => localStorage.getItem("access_token");
-  
-  // Next.js rewriteでトレイリングスラッシュが消失する問題を回避するため、直接バックエンドURLを使用
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8005";
-  
-  const apiFetch = async (path: string, options: RequestInit = {}) => {
-    const url = `${API_BASE}${path}`;
-    return fetch(url, {
-      ...options,
-      headers: {
-        ...options.headers,
-        Authorization: `Bearer ${getToken()}`,
-      },
-    });
-  };
+  const [activeTab, setActiveTab] = useState<"health" | "backup" | "users" | "cleanup" | "export" | "emergency" | "email" | "audit">("health");
 
   const fetchHealth = async () => {
     setLoading((l) => ({ ...l, health: true }));
     try {
-      const res = await apiFetch("/api/admin/system/health/");
-      if (res.ok) {
-        const data = await res.json();
-        setHealth(data);
-      }
+      const data = await fetchApi<HealthCheck>("/admin/system/health");
+      setHealth(data);
     } catch (error) {
       console.error("Failed to fetch health:", error);
     } finally {
@@ -196,16 +201,14 @@ export default function SystemPage() {
   const fetchEmergency = async () => {
     setLoading((l) => ({ ...l, emergency: true }));
     try {
-      const res = await apiFetch("/api/admin/emergency/");
-      if (res.ok) {
-        const data = await res.json();
-        setEmergency(data);
-        setEmergencyForm({
-          emergency_stop: data.emergency_stop,
-          emergency_message: data.emergency_message || "",
-          maintenance_mode: data.maintenance_mode,
-        });
-      }
+      const data = await fetchApi<EmergencySettings>("/admin/emergency");
+      setEmergency(data);
+      setEmergencyForm({
+        emergency_stop: data.emergency_stop,
+        emergency_message: data.emergency_message || "",
+        maintenance_mode: data.maintenance_mode,
+        operation_mode: data.operation_mode || "normal",
+      });
     } catch (error) {
       console.error("Failed to fetch emergency:", error);
     } finally {
@@ -220,18 +223,12 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, emergency: true }));
     try {
-      const res = await apiFetch("/api/admin/emergency/", {
+      const data = await fetchApi<{ message?: string }>("/admin/emergency", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(emergencyForm),
       });
-      if (res.ok) {
-        const data = await res.json();
-        alert(data.message || "設定を更新しました");
-        fetchEmergency();
-      } else {
-        alert("更新に失敗しました");
-      }
+      alert(data.message || "設定を更新しました");
+      fetchEmergency();
     } catch (error) {
       console.error("Failed to update emergency:", error);
       alert("更新に失敗しました");
@@ -243,19 +240,33 @@ export default function SystemPage() {
   const fetchEmailSettings = async () => {
     setLoading((l) => ({ ...l, email: true }));
     try {
-      const res = await apiFetch("/api/admin/email-settings/");
-      if (res.ok) {
-        const data = await res.json();
-        setEmailSettings(data);
-        setEmailForm({
-          email_mode: data.email_mode || "test",
-          sendgrid_api_key: "",
-          email_from_address: data.email_from_address || "",
-          email_from_name: data.email_from_name || "",
-        });
-      }
+      const data = await fetchApi<{
+        email_mode: string;
+        sendgrid_api_key_set: boolean;
+        sendgrid_api_key_masked: string;
+        email_from_address: string;
+        email_from_name: string;
+        updated_at?: string | null;
+        updated_by?: string | null;
+      }>("/admin/email-settings");
+      setEmailSettings({
+        email_mode: data.email_mode as "test" | "production",
+        sendgrid_api_key_set: data.sendgrid_api_key_set,
+        sendgrid_api_key_masked: data.sendgrid_api_key_masked,
+        email_from_address: data.email_from_address,
+        email_from_name: data.email_from_name,
+        updated_at: data.updated_at || null,
+        updated_by: data.updated_by || null,
+      });
+      setEmailForm((f) => ({
+        ...f,
+        email_mode: (data.email_mode as "test" | "production") || "test",
+        email_from_address: data.email_from_address,
+        email_from_name: data.email_from_name,
+      }));
     } catch (error) {
       console.error("Failed to fetch email settings:", error);
+      alert("取得に失敗しました");
     } finally {
       setLoading((l) => ({ ...l, email: false }));
     }
@@ -275,20 +286,14 @@ export default function SystemPage() {
         payload.sendgrid_api_key = emailForm.sendgrid_api_key;
       }
       
-      const res = await apiFetch("/api/admin/email-settings/", {
+      const data = await fetchApi<{ message?: string }>("/admin/email-settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      
-      if (res.ok) {
-        const data = await res.json();
-        alert(data.message || "メール設定を更新しました");
-        setEmailForm((f) => ({ ...f, sendgrid_api_key: "" }));
-        fetchEmailSettings();
-      } else {
-        alert("更新に失敗しました");
-      }
+
+      alert(data.message || "メール設定を更新しました");
+      setEmailForm((f) => ({ ...f, sendgrid_api_key: "" }));
+      fetchEmailSettings();
     } catch (error) {
       console.error("Failed to update email settings:", error);
       alert("更新に失敗しました");
@@ -305,13 +310,11 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, emailTest: true }));
     try {
-      const res = await apiFetch("/api/admin/email-test/", {
+      const data = await fetchApi<{ success: boolean; message?: string; error?: string }>("/admin/email-test", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to_email: testEmailAddress }),
       });
-      
-      const data = await res.json();
+
       if (data.success) {
         alert(`テストメール送信${emailForm.email_mode === "test" ? "（ログ出力のみ）" : ""}完了: ${data.message || "成功"}`);
       } else {
@@ -328,11 +331,8 @@ export default function SystemPage() {
   const fetchBackups = async () => {
     setLoading((l) => ({ ...l, backup: true }));
     try {
-      const res = await apiFetch("/api/admin/system/backup/");
-      if (res.ok) {
-        const data = await res.json();
-        setBackups(data.backups || []);
-      }
+      const data = await fetchApi<{ backups?: Backup[] }>("/admin/system/backup");
+      setBackups(data.backups || []);
     } catch (error) {
       console.error("Failed to fetch backups:", error);
     } finally {
@@ -343,16 +343,12 @@ export default function SystemPage() {
   const createBackup = async (type: "sqlite" | "json") => {
     setLoading((l) => ({ ...l, backup: true }));
     try {
-      const res = await apiFetch("/api/admin/system/backup/", {
+      const data = await fetchApi<{ filename?: string }>("/admin/system/backup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        alert(`バックアップ作成完了: ${data.filename}`);
-        fetchBackups();
-      }
+      alert(`バックアップ作成完了: ${data.filename}`);
+      fetchBackups();
     } catch (error) {
       console.error("Failed to create backup:", error);
       alert("バックアップ作成に失敗しました");
@@ -365,14 +361,11 @@ export default function SystemPage() {
     if (!confirm(`${filename} を削除しますか？`)) return;
     
     try {
-      const res = await apiFetch("/api/admin/system/backup/", {
+      await fetchApi("/admin/system/backup", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename }),
       });
-      if (res.ok) {
-        fetchBackups();
-      }
+      fetchBackups();
     } catch (error) {
       console.error("Failed to delete backup:", error);
     }
@@ -381,11 +374,8 @@ export default function SystemPage() {
   const fetchCleanupPreview = async () => {
     setLoading((l) => ({ ...l, cleanup: true }));
     try {
-      const res = await apiFetch("/api/admin/system/cleanup/");
-      if (res.ok) {
-        const data = await res.json();
-        setCleanup(data);
-      }
+      const data = await fetchApi<CleanupPreview>("/admin/system/cleanup");
+      setCleanup(data);
     } catch (error) {
       console.error("Failed to fetch cleanup preview:", error);
     } finally {
@@ -398,16 +388,12 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, cleanup: true }));
     try {
-      const res = await apiFetch("/api/admin/system/cleanup/", {
+      const data = await fetchApi<{ results?: Record<string, unknown> }>("/admin/system/cleanup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        alert(`クリーンアップ完了: ${JSON.stringify(data.results)}`);
-        fetchCleanupPreview();
-      }
+      alert(`クリーンアップ完了: ${JSON.stringify(data.results)}`);
+      fetchCleanupPreview();
     } catch (error) {
       console.error("Failed to run cleanup:", error);
     } finally {
@@ -418,15 +404,52 @@ export default function SystemPage() {
   const fetchUsers = async () => {
     setLoading((l) => ({ ...l, users: true }));
     try {
-      const res = await apiFetch("/api/admin/system/users/");
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data.users || []);
-      }
+      const data = await fetchApi<{ users?: UserData[] }>("/admin/system/users");
+      setUsers(data.users || []);
     } catch (error) {
       console.error("Failed to fetch users:", error);
     } finally {
       setLoading((l) => ({ ...l, users: false }));
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    setLoading((l) => ({ ...l, audit: true }));
+    try {
+      const data = await fetchApi<{ logs?: AdminAuditLog[] }>("/admin/system/logs?type=admin&limit=200");
+      setAuditLogs(data.logs || []);
+    } catch (error) {
+      console.error("Failed to fetch audit logs:", error);
+    } finally {
+      setLoading((l) => ({ ...l, audit: false }));
+    }
+  };
+
+  const fetchSettingHistory = async () => {
+    setLoading((l) => ({ ...l, settingsHistory: true }));
+    try {
+      const data = await fetchApi<{ histories?: SettingHistory[] }>("/admin/system/settings/history");
+      setSettingHistories(data.histories || []);
+    } catch (error) {
+      console.error("Failed to fetch setting history:", error);
+    } finally {
+      setLoading((l) => ({ ...l, settingsHistory: false }));
+    }
+  };
+
+  const rollbackSetting = async (historyId: string) => {
+    if (!confirm("この履歴にロールバックしますか？")) return;
+    try {
+      await fetchApi("/admin/system/settings/rollback", {
+        method: "POST",
+        body: JSON.stringify({ history_id: historyId }),
+      });
+      fetchSettingHistory();
+      fetchEmergency();
+      fetchEmailSettings();
+    } catch (error) {
+      console.error("Failed to rollback setting:", error);
+      alert("ロールバックに失敗しました");
     }
   };
 
@@ -465,20 +488,13 @@ export default function SystemPage() {
         body.new_password = userForm.new_password;
       }
       
-      const res = await apiFetch("/api/admin/system/users/", {
+      await fetchApi("/admin/system/users", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      
-      if (res.ok) {
-        alert("ユーザー情報を更新しました");
-        setEditingUser(null);
-        fetchUsers();
-      } else {
-        const data = await res.json();
-        alert(data.error || "更新に失敗しました");
-      }
+      alert("ユーザー情報を更新しました");
+      setEditingUser(null);
+      fetchUsers();
     } catch (error) {
       console.error("Failed to update user:", error);
       alert("エラーが発生しました");
@@ -489,19 +505,12 @@ export default function SystemPage() {
     if (!confirm(`${username} を削除しますか？この操作は取り消せません。`)) return;
     
     try {
-      const res = await apiFetch("/api/admin/system/users/", {
+      await fetchApi("/admin/system/users", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
-      
-      if (res.ok) {
-        alert("ユーザーを削除しました");
-        fetchUsers();
-      } else {
-        const data = await res.json();
-        alert(data.error || "削除に失敗しました");
-      }
+      alert("ユーザーを削除しました");
+      fetchUsers();
     } catch (error) {
       console.error("Failed to delete user:", error);
     }
@@ -509,14 +518,11 @@ export default function SystemPage() {
 
   const updateUserRole = async (userId: number, isStaff: boolean) => {
     try {
-      const res = await apiFetch("/api/admin/system/users/", {
+      await fetchApi("/admin/system/users", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, is_staff: isStaff }),
       });
-      if (res.ok) {
-        fetchUsers();
-      }
+      fetchUsers();
     } catch (error) {
       console.error("Failed to update user:", error);
     }
@@ -527,14 +533,11 @@ export default function SystemPage() {
     
     setLoading((l) => ({ ...l, cache: true }));
     try {
-      const res = await apiFetch("/api/admin/system/cache/", {
+      await fetchApi("/admin/system/cache", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "clear" }),
       });
-      if (res.ok) {
-        alert("キャッシュをクリアしました");
-      }
+      alert("キャッシュをクリアしました");
     } catch (error) {
       console.error("Failed to clear cache:", error);
     } finally {
@@ -545,9 +548,8 @@ export default function SystemPage() {
   const exportData = async (type: string, format: string) => {
     setLoading((l) => ({ ...l, export: true }));
     try {
-      const res = await apiFetch(`/api/admin/system/export/?type=${type}&format=${format}`);
-      
       if (format === "csv") {
+        const res = await fetchApiRaw(`/admin/system/export?type=${type}&format=${format}`);
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -556,7 +558,7 @@ export default function SystemPage() {
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        const data = await res.json();
+        const data = await fetchApi<unknown>(`/admin/system/export?type=${type}&format=${format}`);
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -579,6 +581,8 @@ export default function SystemPage() {
     if (activeTab === "users") fetchUsers();
     if (activeTab === "emergency") fetchEmergency();
     if (activeTab === "email") fetchEmailSettings();
+    if (activeTab === "audit") fetchAuditLogs();
+    if (activeTab === "audit") fetchSettingHistory();
   }, [activeTab]);
 
   const StatusIcon = ({ status }: { status: string }) => {
@@ -593,6 +597,7 @@ export default function SystemPage() {
     { id: "backup", label: "バックアップ", icon: Database },
     { id: "users", label: "ユーザー管理", icon: Users },
     { id: "cleanup", label: "クリーンアップ", icon: Trash2 },
+    { id: "audit", label: "監査ログ", icon: Shield },
     { id: "export", label: "エクスポート", icon: FileDown },
     { id: "emergency", label: "緊急停止", icon: AlertOctagon },
     { id: "email", label: "メール設定", icon: Mail },
@@ -1108,27 +1113,7 @@ export default function SystemPage() {
             </div>
 
             {cleanup && (
-              <div className="grid md:grid-cols-3 gap-4">
-                <div className="bg-white rounded-xl border border-slate-200 p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-5 w-5 text-slate-600" />
-                      <span className="font-medium text-slate-900">期限切れ譲渡</span>
-                    </div>
-                    <span className="text-lg font-bold text-slate-900">{cleanup.preview.expired_transfers}</span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => runCleanup("expired_transfers")}
-                    disabled={cleanup.preview.expired_transfers === 0 || loading.cleanup}
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    削除
-                  </Button>
-                </div>
-
+              <div className="grid md:grid-cols-2 gap-4">
                 <div className="bg-white rounded-xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
@@ -1170,6 +1155,117 @@ export default function SystemPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Audit Log Tab */}
+        {activeTab === "audit" && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h2 className="font-semibold text-slate-900">監査ログ</h2>
+              <Button variant="outline" size="sm" onClick={fetchAuditLogs} disabled={loading.audit}>
+                {loading.audit ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              </Button>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="p-4 border-b border-slate-200">
+                <p className="text-sm text-slate-500">直近200件の管理操作ログ</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">日時</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">操作者</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">アクション</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">対象</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">詳細</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {auditLogs.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-center text-slate-500" colSpan={5}>
+                          ログがありません
+                        </td>
+                      </tr>
+                    ) : (
+                      auditLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-700">
+                            {new Date(log.created_at).toLocaleString("ja-JP")}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">{log.actor || "-"}</td>
+                          <td className="px-4 py-3 text-slate-700">{log.action}</td>
+                          <td className="px-4 py-3 text-slate-700">
+                            {log.target_type}
+                            {log.target_id ? `:${log.target_id}` : ""}
+                          </td>
+                          <td className="px-4 py-3 text-slate-500">
+                            {log.metadata && Object.keys(log.metadata).length > 0
+                              ? JSON.stringify(log.metadata)
+                              : "-"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">設定変更履歴</p>
+                  <p className="text-xs text-slate-500">直近200件</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={fetchSettingHistory} disabled={loading.settingsHistory}>
+                  {loading.settingsHistory ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">日時</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">操作者</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">アクション</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">スナップショット</th>
+                      <th className="text-left px-4 py-3 font-medium text-slate-600">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {settingHistories.length === 0 ? (
+                      <tr>
+                        <td className="px-4 py-6 text-center text-slate-500" colSpan={5}>
+                          履歴がありません
+                        </td>
+                      </tr>
+                    ) : (
+                      settingHistories.map((item) => (
+                        <tr key={item.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-700">
+                            {new Date(item.created_at).toLocaleString("ja-JP")}
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">{item.created_by || "-"}</td>
+                          <td className="px-4 py-3 text-slate-700">{item.action}</td>
+                          <td className="px-4 py-3 text-slate-500">
+                            {JSON.stringify(item.snapshot)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Button size="sm" variant="outline" onClick={() => rollbackSetting(item.id)}>
+                              ロールバック
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1382,6 +1478,24 @@ export default function SystemPage() {
                     }`}
                   />
                 </button>
+              </div>
+
+              {/* Operation Mode */}
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
+                <label className="text-sm font-medium text-slate-700">運用モード</label>
+                <select
+                  value={emergencyForm.operation_mode}
+                  onChange={(e) => setEmergencyForm(f => ({ ...f, operation_mode: e.target.value as EmergencySettings["operation_mode"] }))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-slate-500"
+                >
+                  <option value="normal">通常</option>
+                  <option value="read_only">読み取り専用</option>
+                  <option value="purchase_stop">購入停止</option>
+                  <option value="checkin_only">チェックイン専用</option>
+                </select>
+                <p className="text-xs text-slate-500">
+                  購入停止・チェックイン専用など、運用モードを切り替えます。
+                </p>
               </div>
 
               {/* Save Button */}

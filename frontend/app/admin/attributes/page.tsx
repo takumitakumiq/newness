@@ -7,6 +7,7 @@ import {
   Settings, Save, RefreshCw, Plus, Trash2, X, Check,
   ChevronDown, ChevronUp, GitBranch, AlertCircle, List
 } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface FormFieldCondition {
   field: string;
@@ -66,19 +67,11 @@ export default function AttributesPage() {
   const [newAttributeLimit, setNewAttributeLimit] = useState(100);
   const [deleting, setDeleting] = useState<string | null>(null);
   
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-  const getToken = () => localStorage.getItem("access_token");
-
   const fetchAttributes = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/attributes/`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAttributes(Array.isArray(data) ? data : data.results || []);
-      }
+      const data = await fetchApi<{ results: Attribute[] } | Attribute[]>("/attributes");
+      setAttributes(Array.isArray(data) ? data : data.results || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -86,9 +79,8 @@ export default function AttributesPage() {
   const saveAttribute = async (attr: Attribute) => {
     setSaving(attr.id);
     try {
-      const res = await fetch(`${apiUrl}/api/attributes/${attr.id}/`, {
+      await fetchApi(`/attributes/${attr.id}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           display_name: attr.display_name,
           description: attr.description,
@@ -97,12 +89,8 @@ export default function AttributesPage() {
           is_active: attr.is_active,
         }),
       });
-      if (res.ok) {
-        await fetchAttributes();
-        setEditingAttr(null);
-      } else {
-        alert("保存に失敗しました");
-      }
+      await fetchAttributes();
+      setEditingAttr(null);
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
     finally { setSaving(null); }
   };
@@ -116,9 +104,8 @@ export default function AttributesPage() {
     }
     setSaving("new");
     try {
-      const res = await fetch(`${apiUrl}/api/attributes/`, {
+      await fetchApi("/attributes", {
         method: "POST",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           target_type: newAttributeName.toLowerCase().replace(/\s/g, '_'),
           display_name: newAttributeName,
@@ -129,16 +116,11 @@ export default function AttributesPage() {
           sort_order: attributes.length + 1,
         }),
       });
-      if (res.ok) {
-        await fetchAttributes();
-        setShowAddAttribute(false);
-        setNewAttributeName("");
-        setNewAttributeDesc("");
-        setNewAttributeLimit(100);
-      } else {
-        const data = await res.json();
-        alert("作成に失敗しました: " + JSON.stringify(data));
-      }
+      await fetchAttributes();
+      setShowAddAttribute(false);
+      setNewAttributeName("");
+      setNewAttributeDesc("");
+      setNewAttributeLimit(100);
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
     finally { setSaving(null); }
   };
@@ -147,16 +129,8 @@ export default function AttributesPage() {
     if (!confirm(`「${attrName}」を削除しますか？\n\nこの種別に関連するチケットがある場合、削除できない可能性があります。`)) return;
     setDeleting(attrId);
     try {
-      const res = await fetch(`${apiUrl}/api/attributes/${attrId}/`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok || res.status === 204) {
-        await fetchAttributes();
-      } else {
-        const data = await res.json().catch(() => ({}));
-        alert("削除に失敗しました: " + (data.detail || "関連するチケットがある可能性があります"));
-      }
+      await fetchApi(`/attributes/${attrId}`, { method: "DELETE" });
+      await fetchAttributes();
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
     finally { setDeleting(null); }
   };

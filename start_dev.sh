@@ -40,6 +40,9 @@ BACKEND_PID=$!
 # 3. Start Frontend
 echo -e "${GREEN}Starting Next.js Frontend...${NC}"
 cd frontend
+# Next.js から参照するAPIベースURLを自動設定
+# これが未設定だと WebSocket/REST ともに接続先が不明になり「接続中」のままになる
+export NEXT_PUBLIC_API_URL="http://localhost:8000"
 npm run dev &
 FRONTEND_PID=$!
 cd ..

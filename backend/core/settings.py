@@ -11,9 +11,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-in-production')
 
-DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+def _get_bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+DEBUG = _get_bool_env('DEBUG', default=True)
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
+
+ADMIN_ALLOWED_IPS = [
+    ip.strip()
+    for ip in os.getenv('ADMIN_ALLOWED_IPS', '').split(',')
+    if ip.strip()
+]
 
 INSTALLED_APPS = [
     # Daphne ASGI server (must be first for runserver override)
@@ -52,6 +70,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'api.security_middleware.SecurityHeadersMiddleware',
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -101,7 +120,7 @@ DATABASES = {
 }
 
 # Use SQLite for development if POSTGRES is not available
-if os.getenv('USE_SQLITE', 'False').lower() == 'true':
+if _get_bool_env('USE_SQLITE', default=False):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -156,6 +175,8 @@ REST_FRAMEWORK = {
         'user': '100/minute',           # 一般的なAPI: 1分に100回
         'chat': '20/minute',            # チャット送信: 1分に20回
         'checkin': '60/minute',         # チェックイン: 1分に60回
+        'share': '60/minute',           # 共有リンク閲覧
+        'email_ops': '30/minute',       # メール操作
     },
 }
 

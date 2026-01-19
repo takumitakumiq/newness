@@ -31,7 +31,7 @@ function getAuthToken(): string | null {
 /**
  * Generic fetch wrapper with error handling
  */
-async function fetchApi<T>(
+export async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit & { auth?: boolean }
 ): Promise<T> {
@@ -40,7 +40,8 @@ async function fetchApi<T>(
   const [path, queryString] = endpoint.split('?');
   const normalizedPath = path.endsWith('/') ? path : `${path}/`;
   const normalizedEndpoint = queryString ? `${normalizedPath}?${queryString}` : normalizedPath;
-  const url = `${API_BASE}/api${normalizedEndpoint}`;
+  const base = API_BASE || "";
+  const url = `${base}/api${normalizedEndpoint}`;
   
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -67,7 +68,58 @@ async function fetchApi<T>(
     throw error;
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return undefined as T;
+  }
+
+  return JSON.parse(text) as T;
+}
+
+export async function fetchApiRaw(
+  endpoint: string,
+  options?: RequestInit & { auth?: boolean; throwOnError?: boolean }
+): Promise<Response> {
+  const [path, queryString] = endpoint.split('?');
+  const normalizedPath = path.endsWith('/') ? path : `${path}/`;
+  const normalizedEndpoint = queryString ? `${normalizedPath}?${queryString}` : normalizedPath;
+  const base = API_BASE || "";
+  const url = `${base}/api${normalizedEndpoint}`;
+
+  const headers: Record<string, string> = {
+    ...options?.headers as Record<string, string>,
+  };
+
+  if (options?.auth !== false) {
+    const token = getAuthToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok && options?.throwOnError !== false) {
+    let error: ApiError = { message: `HTTP Error: ${response.status}` };
+    try {
+      const data = await response.json();
+      if (data && typeof data === "object") {
+        error = data as ApiError;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw error;
+  }
+
+  return response;
 }
 
 // === Entry Slots ===
@@ -115,9 +167,13 @@ export async function getReservation(id: string): Promise<Reservation> {
 
 // === Tickets ===
 
-export async function getTicketsByUser(userId: string): Promise<Ticket[]> {
+export async function getTicketsByUser(
+  userId: string,
+  options?: { by?: "user_id" | "guest_identifier" }
+): Promise<Ticket[]> {
+  const key = options?.by === "guest_identifier" ? "guest_identifier" : "user_id";
   return fetchApi<Ticket[]>(
-    `/tickets/by_user?user_id=${encodeURIComponent(userId)}`
+    `/tickets/by_user?${key}=${encodeURIComponent(userId)}`
   );
 }
 
@@ -267,6 +323,17 @@ export async function cancelTicket(ticketId: string): Promise<{ status: string; 
   });
 }
 
+export async function createShareLink(
+  ticketId: string,
+  expiresInHours = 24,
+  maxAccesses = 0
+): Promise<{ token: string; expires_at: string }> {
+  return fetchApi<{ token: string; expires_at: string }>(`/shares/create/`, {
+    method: "POST",
+    body: JSON.stringify({ ticket_id: ticketId, expires_in_hours: expiresInHours, max_accesses: maxAccesses }),
+  });
+}
+
 export async function updateTicketInfo(ticketId: string, guestInfo: Record<string, any>, attributeId?: string): Promise<Ticket> {
   const body: Record<string, any> = { guest_info: guestInfo };
   if (attributeId) {
@@ -298,55 +365,4 @@ export async function getAnnouncements(): Promise<Announcement[]> {
     { auth: false }
   );
   return Array.isArray(data) ? data : data.results;
-}
-
-// === Ticket Transfer ===
-
-export interface TicketTransfer {
-  id: string;
-  ticket: string;
-  ticket_detail?: Ticket;
-  from_user: number;
-  to_user: number | null;
-  transfer_token: string;
-  status: 'pending' | 'accepted' | 'expired' | 'cancelled';
-  status_display: string;
-  expires_at: string;
-  created_at: string;
-  accepted_at: string | null;
-}
-
-export interface TransferCreateResponse {
-  success: boolean;
-  transfer_token: string;
-  transfer_url: string;
-  expires_at: string;
-}
-
-export async function createTicketTransfer(ticketId: string): Promise<TransferCreateResponse> {
-  return fetchApi<TransferCreateResponse>(`/transfers/create`, {
-    method: "POST",
-    body: JSON.stringify({ ticket_id: ticketId }),
-  });
-}
-
-export async function acceptTicketTransfer(transferToken: string): Promise<{ success: boolean; message: string; ticket: Ticket }> {
-  return fetchApi<{ success: boolean; message: string; ticket: Ticket }>(`/transfers/accept`, {
-    method: "POST",
-    body: JSON.stringify({ transfer_token: transferToken }),
-  });
-}
-
-export async function getMyTransfers(): Promise<TicketTransfer[]> {
-  const data = await fetchApi<{ results: TicketTransfer[] } | TicketTransfer[]>(
-    `/mypage/transfers`
-  );
-  return Array.isArray(data) ? data : data.results;
-}
-
-export async function cancelTicketTransfer(transferId: string): Promise<{ success: boolean; message: string }> {
-  return fetchApi<{ success: boolean; message: string }>(`/transfers/cancel`, {
-    method: "POST",
-    body: JSON.stringify({ transfer_id: transferId }),
-  });
 }

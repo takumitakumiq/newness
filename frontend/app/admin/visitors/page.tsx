@@ -1,6 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useVisitorsStore } from "@/store/useVisitorsStore";
+import type { Reservation, Ticket } from "./types";
+import {
+  fetchReservations,
+  fetchTickets,
+  fetchReservationDetail,
+  updateReservation as updateReservationApi,
+  deleteReservation as deleteReservationApi,
+  updateTicket as updateTicketApi,
+} from "./api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -8,172 +19,143 @@ import {
   ChevronLeft, ChevronRight, X, Check, Mail, User
 } from "lucide-react";
 
-interface Reservation {
-  id: string;
-  guest_identifier: string;
-  user_name: string;
-  user_email: string;
-  total_tickets: number;
-  created_at: string;
-  tickets?: Ticket[];
-}
-
-interface Ticket {
-  id: string;
-  status: string;
-  status_display: string;
-  guest_info: Record<string, any>;
-  slot_detail: { event_date: string; start_time: string };
-  attribute_detail: { display_name: string };
-  entered_at: string | null;
-}
-
 export default function VisitorsPage() {
-  const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [view, setView] = useState<"reservations" | "tickets">("reservations");
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<Reservation | null>(null);
-  const [editingRes, setEditingRes] = useState<Reservation | null>(null);
-  const [editingTicket, setEditingTicket] = useState<Ticket | null>(null);
-  const [viewingTicket, setViewingTicket] = useState<Ticket | null>(null);
-  const [editForm, setEditForm] = useState({ user_name: "", user_email: "" });
-  const [ticketForm, setTicketForm] = useState<{ status: string; guest_info: Record<string, any> }>({ status: "", guest_info: {} });
-  const pageSize = 15;
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-  const getToken = () => localStorage.getItem("access_token");
+  const queryClient = useQueryClient();
+  const {
+    search,
+    view,
+    statusFilter,
+    dateFilter,
+    page,
+    selected,
+    editingRes,
+    editingTicket,
+    viewingTicket,
+    editForm,
+    ticketForm,
+    setSearch,
+    setView,
+    setStatusFilter,
+    setDateFilter,
+    setPage,
+    setSelected,
+    setEditingRes,
+    setEditingTicket,
+    setViewingTicket,
+    updateEditForm,
+    updateTicketForm,
+    openEditRes,
+    openEditTicket,
+    openViewTicket,
+  } = useVisitorsStore();
 
-  const fetchReservations = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiUrl}/api/reservations/`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setReservations(Array.isArray(data) ? data : data.results || []);
-      }
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-
-  const fetchTickets = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiUrl}/api/tickets/`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTickets(Array.isArray(data) ? data : data.results || []);
-      }
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  };
-
-  const fetchDetail = async (id: string) => {
-    const res = await fetch(`${apiUrl}/api/reservations/${id}/`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    });
-    if (res.ok) setSelected(await res.json());
-  };
-
-  const updateReservation = async () => {
-    if (!editingRes) return;
-    try {
-      const res = await fetch(`${apiUrl}/api/reservations/${editingRes.id}/`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(editForm),
-      });
-      if (res.ok) {
-        fetchReservations();
-        setEditingRes(null);
-      } else {
-        alert("更新に失敗しました");
-      }
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
-  };
-
-  const deleteReservation = async (id: string) => {
-    if (!confirm("この予約を削除しますか？関連するチケットも削除されます。")) return;
-    try {
-      const res = await fetch(`${apiUrl}/api/reservations/${id}/`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (res.ok) {
-        fetchReservations();
-        setSelected(null);
-      } else {
-        alert("削除に失敗しました");
-      }
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
-  };
-
-  const updateTicket = async () => {
-    if (!editingTicket) return;
-    try {
-      const body: Record<string, any> = { 
-        status: ticketForm.status,
-        guest_info: ticketForm.guest_info
-      };
-      const res = await fetch(`${apiUrl}/api/tickets/${editingTicket.id}/`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        fetchTickets();
-        setEditingTicket(null);
-      } else {
-        alert("更新に失敗しました");
-      }
-    } catch (e) { console.error(e); alert("エラーが発生しました"); }
-  };
-
-  const cancelTicket = async (id: string) => {
-    if (!confirm("このチケットをキャンセルしますか？")) return;
-    try {
-      const res = await fetch(`${apiUrl}/api/tickets/${id}/`, {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "cancelled" }),
-      });
-      if (res.ok) fetchTickets();
-    } catch (e) { console.error(e); }
-  };
-
-  useEffect(() => {
-    if (view === "reservations") fetchReservations();
-    else fetchTickets();
-  }, [view]);
-
-  const filteredRes = reservations.filter(r =>
-    r.user_name?.toLowerCase().includes(search.toLowerCase()) ||
-    r.user_email?.toLowerCase().includes(search.toLowerCase()) ||
-    r.guest_identifier?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const filteredTix = tickets.filter(t => {
-    const s = search.toLowerCase();
-    return t.id?.toLowerCase().includes(s) ||
-      t.guest_info?.name?.toLowerCase().includes(s) ||
-      t.guest_info?.guest_name?.toLowerCase().includes(s) ||
-      t.guest_info?.student_id?.toLowerCase().includes(s) ||
-      t.attribute_detail?.display_name?.toLowerCase().includes(s);
+  const reservationsQuery = useQuery({
+    queryKey: ["admin-reservations"],
+    queryFn: fetchReservations,
+  });
+  const ticketsQuery = useQuery({
+    queryKey: ["admin-tickets"],
+    queryFn: fetchTickets,
   });
 
+  const reservations = reservationsQuery.data ?? [];
+  const tickets = ticketsQuery.data ?? [];
+  const loading = reservationsQuery.isLoading || ticketsQuery.isLoading;
+
+  const filteredRes = useMemo(() => {
+    const s = search.toLowerCase();
+    return reservations
+      .filter(r =>
+        r.user_name?.toLowerCase().includes(s) ||
+        r.user_email?.toLowerCase().includes(s) ||
+        r.guest_identifier?.toLowerCase().includes(s)
+      )
+      .filter(r => !dateFilter || r.created_at?.slice(0, 10) === dateFilter);
+  }, [reservations, search, dateFilter]);
+
+  const filteredTix = useMemo(() => {
+    const s = search.toLowerCase();
+    return tickets.filter(t => {
+      const matchSearch = t.id?.toLowerCase().includes(s) ||
+        t.guest_info?.name?.toLowerCase().includes(s) ||
+        t.guest_info?.guest_name?.toLowerCase().includes(s) ||
+        t.guest_info?.student_id?.toLowerCase().includes(s) ||
+        t.attribute_detail?.display_name?.toLowerCase().includes(s);
+      const matchStatus = statusFilter === "all" || t.status === statusFilter;
+      const matchDate = !dateFilter || t.slot_detail?.event_date === dateFilter;
+      return matchSearch && matchStatus && matchDate;
+    });
+  }, [tickets, search, statusFilter, dateFilter]);
+
   const data = view === "reservations" ? filteredRes : filteredTix;
+  const pageSize = 15;
   const paged = data.slice((page - 1) * pageSize, page * pageSize);
   const totalPages = Math.ceil(data.length / pageSize);
+  const ticketCounts = useMemo(() => ({
+    all: tickets.length,
+    valid: tickets.filter(t => t.status === "valid").length,
+    entered: tickets.filter(t => t.status === "entered").length,
+    cancelled: tickets.filter(t => t.status === "cancelled").length,
+  }), [tickets]);
+
+  const reservationDetailMutation = useMutation({
+    mutationFn: fetchReservationDetail,
+    onSuccess: (detail) => setSelected(detail),
+  });
+
+  const updateReservationMutation = useMutation({
+    mutationFn: updateReservationApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-reservations"] });
+      setEditingRes(null);
+    },
+    onError: () => alert("更新に失敗しました"),
+  });
+
+  const deleteReservationMutation = useMutation({
+    mutationFn: deleteReservationApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-reservations"] });
+      setSelected(null);
+    },
+    onError: () => alert("削除に失敗しました"),
+  });
+
+  const updateTicketMutation = useMutation({
+    mutationFn: updateTicketApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-tickets"] });
+      setEditingTicket(null);
+    },
+    onError: () => alert("更新に失敗しました"),
+  });
+
+  const fetchDetail = (id: string) => reservationDetailMutation.mutate(id);
+
+  const updateReservation = () => {
+    if (!editingRes) return;
+    updateReservationMutation.mutate({ id: editingRes.id, data: editForm });
+  };
+
+  const deleteReservation = (id: string) => {
+    if (!confirm("この予約を削除しますか？関連するチケットも削除されます。")) return;
+    deleteReservationMutation.mutate(id);
+  };
+
+  const updateTicket = () => {
+    if (!editingTicket) return;
+    updateTicketMutation.mutate({ id: editingTicket.id, data: { status: ticketForm.status, guest_info: ticketForm.guest_info } });
+  };
+
+  const cancelTicket = (id: string) => {
+    if (!confirm("このチケットをキャンセルしますか？")) return;
+    updateTicketMutation.mutate({ id, data: { status: "cancelled" } });
+  };
 
   const exportCSV = () => {
     const rows = view === "reservations"
-      ? [["ID", "氏名", "メール", "枚数", "日時"], ...reservations.map(r => [r.id, r.user_name, r.user_email, r.total_tickets, r.created_at])]
-      : [["ID", "日付", "時間", "種別", "名前", "ステータス"], ...tickets.map(t => [t.id, t.slot_detail?.event_date, t.slot_detail?.start_time, t.attribute_detail?.display_name, getGuestDisplayText(t.guest_info), t.status_display])];
+      ? [["ID", "氏名", "メール", "枚数", "日時"], ...filteredRes.map(r => [r.id, r.user_name, r.user_email, r.total_tickets, r.created_at])]
+      : [["ID", "日付", "時間", "種別", "名前", "ステータス"], ...filteredTix.map(t => [t.id, t.slot_detail?.event_date, t.slot_detail?.start_time, t.attribute_detail?.display_name, getGuestDisplayText(t.guest_info), t.status_display])];
     const csv = rows.map(r => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a");
@@ -187,77 +169,123 @@ export default function VisitorsPage() {
     return <span className={`px-2 py-0.5 rounded text-xs font-medium ${c}`}>{label}</span>;
   };
 
-  const openEditRes = (r: Reservation) => {
-    setEditingRes(r);
-    setEditForm({ user_name: r.user_name || "", user_email: r.user_email || "" });
+  const getFieldLabel = (key: string) => {
+    const map: Record<string, string> = {
+      name: "氏名",
+      guest_name: "氏名",
+      student_id: "学籍",
+      graduation_year: "卒業年度",
+      email: "メール",
+      tel: "電話番号",
+    };
+    return map[key] || key;
   };
 
-  // guest_infoから名前を取得するヘルパー関数
-  const getGuestName = (info?: Record<string, any>): string => {
-    if (!info) return "";
-    // 可能な名前フィールドをチェック
-    return info.name || info.guest_name || info.student_id || info.graduation_year || "";
-  };
-
-  // guest_infoの表示用テキストを生成
   const getGuestDisplayText = (info?: Record<string, any>): string => {
     if (!info) return "-";
     const name = info.name || info.guest_name;
     if (name) return name;
-    // 名前がない場合、他の情報を表示
     if (info.student_id) return `学籍: ${info.student_id}`;
     if (info.graduation_year) return `卒業: ${info.graduation_year}`;
-    // その他の場合は最初のフィールドを表示
     const firstValue = Object.values(info)[0];
     return firstValue ? String(firstValue) : "-";
   };
 
-  const openEditTicket = (t: Ticket) => {
-    setEditingTicket(t);
-    // nameフィールドを必ず含める
-    setTicketForm({ 
-      status: t.status, 
-      guest_info: { name: "", ...t.guest_info } 
-    });
-  };
-
-  const openViewTicket = (t: Ticket) => {
-    setViewingTicket(t);
-  };
-
-  // guest_infoフィールドのラベルを取得
-  const getFieldLabel = (key: string): string => {
-    const labels: Record<string, string> = {
-      name: "氏名", guest_name: "氏名", student_id: "学籍番号",
-      graduation_year: "卒業年度", phone: "電話番号", phone_number: "電話番号",
-      email: "メール", company: "会社名", relationship: "続柄"
-    };
-    return labels[key] || key;
-  };
-
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">来場者管理</h1>
-          <p className="text-sm text-slate-500">{data.length} 件</p>
+          <h1 className="text-2xl font-bold text-slate-900">来場者・予約管理</h1>
+          <p className="text-sm text-slate-500">予約/チケットの検索・更新・運用をまとめて管理</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={exportCSV}><Download className="h-4 w-4 mr-1" />CSV</Button>
-          <Button variant="outline" size="sm" onClick={() => view === "reservations" ? fetchReservations() : fetchTickets()}><RefreshCw className="h-4 w-4" /></Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => view === "reservations" ? reservationsQuery.refetch() : ticketsQuery.refetch()}>
+            <RefreshCw className="h-4 w-4 mr-1" />更新
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportCSV}>
+            <Download className="h-4 w-4 mr-1" />CSV
+          </Button>
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-100">
-          <button onClick={() => { setView("reservations"); setPage(1); }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${view === "reservations" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}>予約</button>
-          <button onClick={() => { setView("tickets"); setPage(1); }} className={`px-3 py-1.5 text-sm font-medium rounded-md transition ${view === "tickets" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}>チケット</button>
+      {/* Filters */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-4">
+        <div className="flex flex-col lg:flex-row gap-3 lg:items-center">
+          <div className="inline-flex rounded-xl border border-slate-200 p-1 bg-slate-50">
+            <button
+              onClick={() => setView("reservations")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition ${view === "reservations" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}
+            >
+              予約一覧
+            </button>
+            <button
+              onClick={() => setView("tickets")}
+              className={`px-4 py-2 text-sm font-medium rounded-lg transition ${view === "tickets" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}
+            >
+              チケット一覧
+            </button>
+          </div>
+          <div className="grid md:grid-cols-3 gap-2 flex-1">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+              <Input
+                placeholder="名前・メール・IDで検索"
+                className="pl-9"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <Input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+            />
+            {view === "tickets" ? (
+              <div className="flex flex-wrap gap-2">
+                {([
+                  { key: "all", label: "全て" },
+                  { key: "valid", label: "有効" },
+                  { key: "entered", label: "入場済" },
+                  { key: "cancelled", label: "キャンセル" },
+                ] as const).map(s => (
+                  <button
+                    key={s.key}
+                    onClick={() => setStatusFilter(s.key)}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium border transition ${statusFilter === s.key ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200 hover:border-slate-300"}`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500 flex items-center">予約日の指定で絞り込み</div>
+            )}
+          </div>
         </div>
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-          <Input placeholder="検索..." className="pl-9" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+      </div>
+
+      {/* Summary */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <p className="text-xs text-slate-500">現在の表示</p>
+          <p className="text-2xl font-semibold text-slate-900">{data.length}</p>
+          <p className="text-xs text-slate-500">件</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <p className="text-xs text-slate-500">予約数</p>
+          <p className="text-2xl font-semibold text-slate-900">{reservations.length}</p>
+          <p className="text-xs text-slate-500">全体</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <p className="text-xs text-slate-500">チケット数</p>
+          <p className="text-2xl font-semibold text-slate-900">{ticketCounts.all}</p>
+          <p className="text-xs text-slate-500">全体</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <p className="text-xs text-slate-500">入場済み</p>
+          <p className="text-2xl font-semibold text-slate-900">{ticketCounts.entered}</p>
+          <p className="text-xs text-slate-500">キャンセル {ticketCounts.cancelled}</p>
         </div>
       </div>
 
@@ -341,9 +369,9 @@ export default function VisitorsPage() {
         <div className="flex items-center justify-between">
           <span className="text-sm text-slate-500">{(page - 1) * pageSize + 1}-{Math.min(page * pageSize, data.length)} / {data.length}</span>
           <div className="flex gap-1">
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}><ChevronLeft className="h-4 w-4" /></Button>
+            <Button variant="outline" size="sm" onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1}><ChevronLeft className="h-4 w-4" /></Button>
             <span className="px-3 py-1 text-sm text-slate-600">{page}/{totalPages}</span>
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}><ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="outline" size="sm" onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page === totalPages}><ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
       )}
@@ -415,13 +443,13 @@ export default function VisitorsPage() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   <User className="h-3.5 w-3.5 inline mr-1" />氏名
                 </label>
-                <Input value={editForm.user_name} onChange={e => setEditForm(f => ({ ...f, user_name: e.target.value }))} />
+                <Input value={editForm.user_name} onChange={e => updateEditForm(f => ({ ...f, user_name: e.target.value }))} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   <Mail className="h-3.5 w-3.5 inline mr-1" />メールアドレス
                 </label>
-                <Input type="email" value={editForm.user_email} onChange={e => setEditForm(f => ({ ...f, user_email: e.target.value }))} />
+                <Input type="email" value={editForm.user_email} onChange={e => updateEditForm(f => ({ ...f, user_email: e.target.value }))} />
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setEditingRes(null)}>キャンセル</Button>
@@ -468,7 +496,7 @@ export default function VisitorsPage() {
                   <Input 
                     value={String(ticketForm.guest_info.name || "")} 
                     placeholder="山田 太郎"
-                    onChange={e => setTicketForm(f => ({ 
+                    onChange={e => updateTicketForm(f => ({ 
                       ...f, 
                       guest_info: { ...f.guest_info, name: e.target.value } 
                     }))} 
@@ -482,7 +510,7 @@ export default function VisitorsPage() {
                       <label className="block text-sm text-slate-600 mb-1">{getFieldLabel(key)}</label>
                       <Input 
                         value={String(value || "")} 
-                        onChange={e => setTicketForm(f => ({ 
+                        onChange={e => updateTicketForm(f => ({ 
                           ...f, 
                           guest_info: { ...f.guest_info, [key]: e.target.value } 
                         }))} 
@@ -503,7 +531,7 @@ export default function VisitorsPage() {
                   ].map(s => (
                     <button
                       key={s.value}
-                      onClick={() => setTicketForm(f => ({ ...f, status: s.value }))}
+                      onClick={() => updateTicketForm(f => ({ ...f, status: s.value }))}
                       className={`py-2 px-3 rounded-lg text-sm font-medium border-2 transition ${
                         ticketForm.status === s.value ? `${s.color} ring-2 ring-offset-1 ring-slate-400` : "bg-white border-slate-200 text-slate-600"
                       }`}

@@ -8,6 +8,7 @@ import {
 import { 
   Calendar, Ticket, CheckCircle, XCircle, TrendingUp, Users, Clock, RefreshCw 
 } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface DashboardData {
   summary: {
@@ -16,10 +17,18 @@ interface DashboardData {
     checked_in_count: number;
     cancelled_count: number;
     check_in_rate: number;
+    checkin_error_rate: number;
+    email_failure_rate: number;
+    admin_action_count: number;
+    share_access_count: number;
   };
   by_attribute: { attribute__display_name: string; count: number }[];
   by_slot: { slot__event_date: string; slot__start_time: string; count: number }[];
   sales_trend: { date: string; count: number }[];
+  anomalies?: {
+    share_spikes: { share_link_id: string; ticket_id: string; count: number }[];
+    duplicate_checkins: { ticket_id: string; total: number; device_count: number }[];
+  };
 }
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
@@ -27,19 +36,14 @@ const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"
 export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/admin/statistics/`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
+      const json = await fetchApi<DashboardData>("/admin/statistics");
+      setData(json);
+      setLastUpdated(new Date().toISOString());
     } catch (error) {
       console.error("Failed to fetch data", error);
     } finally {
@@ -59,6 +63,17 @@ export default function AdminDashboard() {
 
   if (!data) return <p className="text-center py-10 text-slate-500">データの取得に失敗しました</p>;
 
+  const remainingCount = Math.max(
+    0,
+    data.summary.total_tickets - data.summary.checked_in_count - data.summary.cancelled_count
+  );
+  const topAttribute = data.by_attribute?.[0]?.attribute__display_name || "-";
+  const peakSlot = data.by_slot?.[0]
+    ? `${data.by_slot[0].slot__event_date} ${data.by_slot[0].slot__start_time}`
+    : "-";
+  const shareSpikeCount = data.anomalies?.share_spikes?.length || 0;
+  const duplicateCheckinCount = data.anomalies?.duplicate_checkins?.length || 0;
+
   const stats = [
     { label: "総予約数", value: data.summary.total_reservations, icon: Calendar, color: "bg-blue-500", bg: "bg-blue-50" },
     { label: "チケット数", value: data.summary.total_tickets, icon: Ticket, color: "bg-violet-500", bg: "bg-violet-50" },
@@ -74,9 +89,14 @@ export default function AdminDashboard() {
           <h1 className="text-xl font-bold text-slate-900">ダッシュボード</h1>
           <p className="text-sm text-slate-500">{new Date().toLocaleDateString("ja-JP", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
         </div>
-        <button onClick={fetchData} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
-          <RefreshCw className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-xs text-slate-500">最終更新: {new Date(lastUpdated).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}</span>
+          )}
+          <button onClick={fetchData} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -142,6 +162,72 @@ export default function AdminDashboard() {
                 <Legend wrapperStyle={{ fontSize: 12 }} />
               </PieChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Insights & Quick Actions */}
+      <div className="grid lg:grid-cols-3 gap-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <h3 className="font-semibold text-slate-900 mb-3">インサイト</h3>
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">未入場数</span>
+              <span className="font-semibold text-slate-900">{remainingCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">最多の種別</span>
+              <span className="font-semibold text-slate-900">{topAttribute}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">ピーク枠</span>
+              <span className="font-semibold text-slate-900">{peakSlot}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">チェックイン失敗率</span>
+              <span className="font-semibold text-slate-900">{data.summary.checkin_error_rate}%</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">メール失敗率</span>
+              <span className="font-semibold text-slate-900">{data.summary.email_failure_rate}%</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">管理操作件数</span>
+              <span className="font-semibold text-slate-900">{data.summary.admin_action_count}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">共有リンク閲覧</span>
+              <span className="font-semibold text-slate-900">{data.summary.share_access_count}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">共有リンク異常</span>
+              <span className="font-semibold text-slate-900">{shareSpikeCount}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">重複チェックイン</span>
+              <span className="font-semibold text-slate-900">{duplicateCheckinCount}</span>
+            </div>
+          </div>
+        </div>
+        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-4">
+          <h3 className="font-semibold text-slate-900 mb-3">クイックアクション</h3>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <a className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition" href="/admin/visitors">
+              <p className="text-sm text-slate-500">来場者</p>
+              <p className="font-semibold text-slate-900">予約を確認</p>
+            </a>
+            <a className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition" href="/admin/slots">
+              <p className="text-sm text-slate-500">時間枠</p>
+              <p className="font-semibold text-slate-900">枠を編集</p>
+            </a>
+            <a className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition" href="/admin/announcements">
+              <p className="text-sm text-slate-500">お知らせ</p>
+              <p className="font-semibold text-slate-900">即時告知</p>
+            </a>
+            <a className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition" href="/admin/system">
+              <p className="text-sm text-slate-500">システム</p>
+              <p className="font-semibold text-slate-900">運用設定</p>
+            </a>
           </div>
         </div>
       </div>

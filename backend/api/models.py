@@ -6,6 +6,7 @@ import uuid
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
+from django.utils import timezone
 
 
 class EntrySlot(models.Model):
@@ -25,6 +26,11 @@ class EntrySlot(models.Model):
         default=0
     )
     is_active = models.BooleanField(verbose_name="有効", default=True)
+    entry_closed = models.BooleanField(
+        verbose_name="入場締切",
+        default=False,
+        help_text="ONにするとチェックインを拒否（入場締切）"
+    )
     
     class Meta:
         db_table = "api_entryslot"
@@ -290,6 +296,36 @@ class CheckInLog(models.Model):
         return f"{self.ticket_id} - {self.action} ({self.created_at})"
 
 
+class AdminActionLog(models.Model):
+    """
+    Audit log for admin/system operations.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="admin_action_logs",
+        verbose_name="操作者",
+    )
+    action = models.CharField(max_length=100, verbose_name="アクション")
+    target_type = models.CharField(max_length=100, blank=True, verbose_name="対象種別")
+    target_id = models.CharField(max_length=255, blank=True, verbose_name="対象ID")
+    metadata = models.JSONField(default=dict, blank=True, verbose_name="メタデータ")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        db_table = "api_adminactionlog"
+        ordering = ["-created_at"]
+        verbose_name = "管理操作ログ"
+        verbose_name_plural = "管理操作ログ"
+
+    def __str__(self):
+        actor = self.actor.username if self.actor else "unknown"
+        return f"{actor} - {self.action} ({self.created_at})"
+
+
 class Announcement(models.Model):
     """
     サイト上に表示する緊急お知らせ
@@ -345,99 +381,6 @@ class Announcement(models.Model):
         return f"[{self.get_priority_display()}] {self.title}"
 
 
-class TicketTransfer(models.Model):
-    """
-    チケット譲渡機能用のトランスファーリンク
-    """
-    class Status(models.TextChoices):
-        PENDING = "pending", "未受取"
-        ACCEPTED = "accepted", "受取済み"
-        EXPIRED = "expired", "期限切れ"
-        CANCELLED = "cancelled", "キャンセル"
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    ticket = models.ForeignKey(
-        Ticket,
-        on_delete=models.CASCADE,
-        related_name="transfers",
-        verbose_name="チケット"
-    )
-    from_user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name="sent_transfers",
-        verbose_name="送信者"
-    )
-    to_user = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="received_transfers",
-        verbose_name="受取者"
-    )
-    transfer_token = models.CharField(
-        max_length=64,
-        unique=True,
-        verbose_name="譲渡トークン"
-    )
-    status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.PENDING,
-        verbose_name="ステータス"
-    )
-    expires_at = models.DateTimeField(
-        verbose_name="有効期限"
-    )
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        verbose_name="作成日時"
-    )
-    accepted_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name="受取日時"
-    )
-    intended_email = models.EmailField(
-        blank=True,
-        null=True,
-        verbose_name="指定受取メール",
-        help_text="指定された場合、このメールのユーザーのみ受取可能"
-    )
-    
-    class Meta:
-        db_table = "api_tickettransfer"
-        ordering = ["-created_at"]
-        verbose_name = "チケット譲渡"
-        verbose_name_plural = "チケット譲渡"
-    
-    def __str__(self):
-        return f"{self.ticket_id} -> {self.to_user or '未受取'}"
-
-
-class PromoCode(models.Model):
-    """
-    Discount codes for ticket purchases.
-    """
-    code = models.CharField(max_length=50, unique=True, verbose_name="コード")
-    discount_amount = models.IntegerField(verbose_name="割引額", help_text="円単位")
-    is_active = models.BooleanField(default=True, verbose_name="有効")
-    valid_from = models.DateTimeField(null=True, blank=True, verbose_name="有効開始日時")
-    valid_until = models.DateTimeField(null=True, blank=True, verbose_name="有効終了日時")
-    usage_limit = models.PositiveIntegerField(null=True, blank=True, verbose_name="使用回数上限")
-    used_count = models.PositiveIntegerField(default=0, verbose_name="使用回数")
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
-
-    class Meta:
-        db_table = "api_promocode"
-        verbose_name = "プロモーションコード"
-        verbose_name_plural = "プロモーションコード"
-
-    def __str__(self):
-        return f"{self.code} (-{self.discount_amount}円)"
-
-
 class ChatMessage(models.Model):
     """
     Staff chat messages for internal communication.
@@ -466,6 +409,16 @@ class ChatMessage(models.Model):
     def __str__(self):
         return f"{self.sender.username}: {self.content[:30]}"
 
+    def to_payload(self):
+        return {
+            "id": str(self.id),
+            "user_id": self.sender.id,
+            "username": self.sender.username,
+            "content": self.content,
+            "created_at": self.created_at.isoformat(),
+            "is_staff": self.sender.is_staff,
+        }
+
 
 class ChatMessageRead(models.Model):
     """
@@ -493,6 +446,178 @@ class ChatMessageRead(models.Model):
         return f"{self.user.username}: {self.last_read_at}"
 
 
+class TicketShareLink(models.Model):
+    """
+    チケット単位の閲覧専用共有リンク
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="share_links",
+        verbose_name="チケット",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ticket_share_links",
+        verbose_name="作成者",
+    )
+    expires_at = models.DateTimeField(verbose_name="有効期限")
+    revoked_at = models.DateTimeField(null=True, blank=True, verbose_name="無効化日時")
+    max_accesses = models.PositiveIntegerField(
+        default=0,
+        verbose_name="最大アクセス回数",
+        help_text="0の場合は無制限"
+    )
+    access_count = models.PositiveIntegerField(default=0, verbose_name="アクセス回数")
+    last_accessed_at = models.DateTimeField(null=True, blank=True, verbose_name="最終アクセス日時")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        db_table = "api_ticketsharelink"
+        ordering = ["-created_at"]
+        verbose_name = "チケット共有リンク"
+        verbose_name_plural = "チケット共有リンク"
+
+    def __str__(self):
+        return f"share:{self.ticket_id} ({self.created_at})"
+
+    def is_active(self):
+        if self.revoked_at:
+            return False
+        if self.max_accesses and self.access_count >= self.max_accesses:
+            return False
+        return self.expires_at >= timezone.now()
+
+
+class ShareLinkAccessLog(models.Model):
+    """
+    共有リンクのアクセスログ
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    share_link = models.ForeignKey(
+        TicketShareLink,
+        on_delete=models.CASCADE,
+        related_name="access_logs",
+        verbose_name="共有リンク",
+    )
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="share_access_logs",
+        verbose_name="チケット",
+    )
+    ip_address = models.CharField(max_length=64, blank=True, verbose_name="IPアドレス")
+    user_agent = models.TextField(blank=True, verbose_name="ユーザーエージェント")
+    success = models.BooleanField(default=True, verbose_name="成功")
+    message = models.TextField(blank=True, verbose_name="メッセージ")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="アクセス日時")
+
+    class Meta:
+        db_table = "api_sharelinkaccesslog"
+        ordering = ["-created_at"]
+        verbose_name = "共有リンクアクセスログ"
+        verbose_name_plural = "共有リンクアクセスログ"
+
+    def __str__(self):
+        return f"{self.share_link_id} ({self.created_at})"
+
+
+class EmailDeliveryLog(models.Model):
+    """
+    メール送信ログ
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    to_email = models.EmailField(verbose_name="送信先")
+    subject = models.CharField(max_length=255, verbose_name="件名")
+    mode = models.CharField(max_length=20, verbose_name="送信モード")
+    success = models.BooleanField(default=False, verbose_name="成功")
+    provider_message = models.TextField(blank=True, verbose_name="プロバイダ応答")
+    reservation = models.ForeignKey(
+        Reservation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="email_logs",
+        verbose_name="予約",
+    )
+    ticket = models.ForeignKey(
+        Ticket,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="email_logs",
+        verbose_name="チケット",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="email_delivery_logs",
+        verbose_name="操作者",
+    )
+    metadata = models.JSONField(default=dict, blank=True, verbose_name="メタデータ")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="送信日時")
+
+    class Meta:
+        db_table = "api_emaildeliverylog"
+        ordering = ["-created_at"]
+        verbose_name = "メール送信ログ"
+        verbose_name_plural = "メール送信ログ"
+
+    def __str__(self):
+        return f"{self.to_email} ({self.created_at})"
+
+
+class UserProfile(models.Model):
+    """
+    顧客サポート向けの補助情報
+    """
+    class VerificationStatus(models.TextChoices):
+        UNVERIFIED = "unverified", "未確認"
+        PENDING = "pending", "確認中"
+        VERIFIED = "verified", "確認済み"
+        REJECTED = "rejected", "却下"
+
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="profile",
+        verbose_name="ユーザー",
+    )
+    support_note = models.TextField(blank=True, default="", verbose_name="サポートメモ")
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VerificationStatus.choices,
+        default=VerificationStatus.UNVERIFIED,
+        verbose_name="本人確認ステータス",
+    )
+    verification_note = models.TextField(blank=True, default="", verbose_name="本人確認メモ")
+    verification_updated_at = models.DateTimeField(null=True, blank=True, verbose_name="本人確認更新日時")
+    verification_updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="verification_updates",
+        verbose_name="本人確認更新者",
+    )
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新日時")
+
+    class Meta:
+        db_table = "api_userprofile"
+        verbose_name = "ユーザープロフィール"
+        verbose_name_plural = "ユーザープロフィール"
+
+    def __str__(self):
+        return f"{self.user.username} profile"
+
+
 class SystemSetting(models.Model):
     """
     システム全体の設定（緊急停止、メール設定など）
@@ -501,6 +626,12 @@ class SystemSetting(models.Model):
     class EmailMode(models.TextChoices):
         TEST = "test", "テストモード（メール送信しない）"
         PRODUCTION = "production", "本番モード（SendGrid送信）"
+
+    class OperationMode(models.TextChoices):
+        NORMAL = "normal", "通常"
+        READ_ONLY = "read_only", "読み取り専用"
+        PURCHASE_STOP = "purchase_stop", "購入停止"
+        CHECKIN_ONLY = "checkin_only", "チェックイン専用"
     
     id = models.AutoField(primary_key=True)
     emergency_stop = models.BooleanField(
@@ -517,6 +648,12 @@ class SystemSetting(models.Model):
         default=False,
         verbose_name="メンテナンスモード",
         help_text="ONにすると一般ユーザーはアクセス不可"
+    )
+    operation_mode = models.CharField(
+        max_length=20,
+        choices=OperationMode.choices,
+        default=OperationMode.NORMAL,
+        verbose_name="運用モード",
     )
     
     # メール設定
@@ -570,3 +707,48 @@ class SystemSetting(models.Model):
         """Get or create the singleton instance."""
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def to_snapshot(self) -> dict:
+        return {
+            "emergency_stop": self.emergency_stop,
+            "emergency_message": self.emergency_message,
+            "maintenance_mode": self.maintenance_mode,
+            "operation_mode": self.operation_mode,
+            "email_mode": self.email_mode,
+            "sendgrid_api_key": self.sendgrid_api_key,
+            "email_from_address": self.email_from_address,
+            "email_from_name": self.email_from_name,
+        }
+
+
+class SystemSettingHistory(models.Model):
+    """
+    システム設定の変更履歴
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    system_setting = models.ForeignKey(
+        SystemSetting,
+        on_delete=models.CASCADE,
+        related_name="history",
+        verbose_name="システム設定",
+    )
+    action = models.CharField(max_length=100, verbose_name="アクション")
+    snapshot = models.JSONField(default=dict, verbose_name="スナップショット")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="system_setting_histories",
+        verbose_name="作成者",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="作成日時")
+
+    class Meta:
+        db_table = "api_systemsettinghistory"
+        ordering = ["-created_at"]
+        verbose_name = "システム設定履歴"
+        verbose_name_plural = "システム設定履歴"
+
+    def __str__(self):
+        return f"{self.action} ({self.created_at})"

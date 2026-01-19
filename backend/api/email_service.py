@@ -36,7 +36,8 @@ class EmailService:
         subject: str,
         html_content: str,
         text_content: Optional[str] = None,
-        template_data: Optional[Dict[str, Any]] = None
+        template_data: Optional[Dict[str, Any]] = None,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         メール送信
@@ -62,9 +63,28 @@ class EmailService:
         from .models import SystemSetting
         
         if settings.email_mode == SystemSetting.EmailMode.TEST:
-            return self._send_test_mode(to_emails, subject, html_content)
+            result = self._send_test_mode(to_emails, subject, html_content)
         else:
-            return self._send_production_mode(to_emails, subject, html_content, text_content)
+            result = self._send_production_mode(to_emails, subject, html_content, text_content)
+
+        try:
+            from .models import EmailDeliveryLog, SystemSetting
+            for email in to_emails:
+                EmailDeliveryLog.objects.create(
+                    to_email=email,
+                    subject=subject,
+                    mode=settings.email_mode,
+                    success=bool(result.get("success")) if isinstance(result, dict) else False,
+                    provider_message=str(result.get("message")) if isinstance(result, dict) else "",
+                    reservation=context.get("reservation") if isinstance(context, dict) else None,
+                    ticket=context.get("ticket") if isinstance(context, dict) else None,
+                    created_by=context.get("created_by") if isinstance(context, dict) else None,
+                    metadata={"details": result.get("details") if isinstance(result, dict) else {}},
+                )
+        except Exception:
+            pass
+
+        return result
     
     def _send_test_mode(
         self,
@@ -165,7 +185,8 @@ class EmailService:
         to_email: str,
         reservation_id: str,
         user_name: str,
-        tickets: List[Dict[str, Any]]
+        tickets: List[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """予約完了メール"""
         subject = f"【MATSU】ご予約完了のお知らせ ({reservation_id})"
@@ -224,14 +245,15 @@ class EmailService:
         </html>
         """
         
-        return self.send_email([to_email], subject, html_content)
+        return self.send_email([to_email], subject, html_content, context=context)
     
     def send_transfer_notification(
         self,
         to_email: str,
         from_user_name: str,
         ticket_info: Dict[str, Any],
-        transfer_url: str
+        transfer_url: str,
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """チケット譲渡通知メール"""
         subject = "【MATSU】チケットが譲渡されました"
@@ -271,7 +293,7 @@ class EmailService:
         </html>
         """
         
-        return self.send_email([to_email], subject, html_content)
+        return self.send_email([to_email], subject, html_content, context=context)
     
     def send_checkin_reminder(
         self,

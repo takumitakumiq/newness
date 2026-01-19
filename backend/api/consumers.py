@@ -118,17 +118,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         
         messages = ChatMessage.objects.select_related('sender').order_by('-created_at')[:limit]
         
-        return [
-            {
-                "id": str(msg.id),
-                "user_id": msg.sender.id,
-                "username": msg.sender.username,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat(),
-                "is_staff": msg.sender.is_staff
-            }
-            for msg in reversed(messages)
-        ]
+        return [msg.to_payload() for msg in reversed(messages)]
     
     @database_sync_to_async
     def save_message(self, content):
@@ -140,14 +130,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             content=content
         )
         
-        return {
-            "id": str(msg.id),
-            "user_id": msg.sender.id,
-            "username": msg.sender.username,
-            "content": msg.content,
-            "created_at": msg.created_at.isoformat(),
-            "is_staff": msg.sender.is_staff
-        }
+        return msg.to_payload()
 
     @database_sync_to_async
     def update_read_status(self):

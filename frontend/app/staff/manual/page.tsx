@@ -16,6 +16,7 @@ import {
   Mail,
   Clock
 } from "lucide-react";
+import { fetchApi, fetchApiRaw } from "@/lib/api";
 
 interface TicketResult {
   id: string;
@@ -46,9 +47,6 @@ export default function ManualCheckInPage() {
     ticket?: TicketResult;
   } | null>(null);
 
-  const getToken = () => localStorage.getItem("access_token");
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-
   // 検索実行
   const performSearch = useCallback(async (searchQuery: string) => {
     if (searchQuery.length < 2) {
@@ -58,20 +56,16 @@ export default function ManualCheckInPage() {
     
     setSearching(true);
     try {
-      const res = await fetch(`${apiUrl}/api/admin/manual-checkin/?q=${encodeURIComponent(searchQuery)}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        setResults(data.results || []);
-      }
+      const data = await fetchApi<{ results?: TicketResult[] }>(
+        `/admin/manual-checkin?q=${encodeURIComponent(searchQuery)}`
+      );
+      setResults(data.results || []);
     } catch (error) {
       console.error("Search error:", error);
     } finally {
       setSearching(false);
     }
-  }, [apiUrl]);
+  }, []);
 
   // デバウンス検索
   useEffect(() => {
@@ -88,15 +82,13 @@ export default function ManualCheckInPage() {
     setCheckInResult(null);
     
     try {
-      const res = await fetch(`${apiUrl}/api/admin/manual-checkin/`, {
+      const res = await fetchApiRaw("/admin/manual-checkin", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticket_id: ticketId }),
+        throwOnError: false,
       });
-      
+
       const data = await res.json();
       setCheckInResult(data);
       
@@ -125,15 +117,13 @@ export default function ManualCheckInPage() {
     
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/admin/checkin/revert/`, {
+      const res = await fetchApiRaw("/admin/checkin/revert", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticket_id: ticketId, reason: "手動取り消し" }),
+        throwOnError: false,
       });
-      
+
       const data = await res.json();
       if (data.success) {
         setResults(prev => prev.map(t => 

@@ -69,6 +69,22 @@ chmod +x start_system.sh
 
 ---
 
+## 🤖 Copilotを使った開発（おすすめ運用）
+
+このリポジトリは「引き継ぎ前提」なので、Copilotは **役割分割（サブエージェント運用）** で使うのがおすすめです。
+
+- 運用フロー: [docs/COPILOT_WORKFLOW.md](docs/COPILOT_WORKFLOW.md)
+- コピペ用プロンプト集: [docs/COPILOT_PROMPTS.md](docs/COPILOT_PROMPTS.md)
+
+基本は次の順で進めます：
+
+1. 仕様/PM（受け入れ条件ACを作る）
+2. 調査（触るファイルを特定）
+3. 実装（最小差分でパッチ）
+4. テスト/レビュー（回帰潰し）
+
+---
+
 ## 🏗 システム構成図（アーキテクチャ）
 
 ```mermaid

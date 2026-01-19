@@ -16,7 +16,6 @@ router.register(r'attributes', views.AttributeConfigViewSet, basename='attribute
 router.register(r'reservations', views.ReservationViewSet, basename='reservations')
 router.register(r'tickets', views.TicketViewSet, basename='tickets')
 router.register(r'announcements', views.AnnouncementViewSet, basename='announcements')
-router.register(r'promocodes', views.PromoCodeViewSet, basename='promocodes')
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -39,13 +38,12 @@ urlpatterns = [
     # Mypage endpoints
     path('mypage/reservations/', views.MyReservationsView.as_view(), name='my_reservations'),
     path('mypage/tickets/', views.MyTicketsView.as_view(), name='my_tickets'),
-    path('mypage/transfers/', views.MyTransfersView.as_view(), name='my_transfers'),
-    
-    # Ticket Transfer endpoints
-    path('transfers/create/', views.TicketTransferCreateView.as_view(), name='transfer_create'),
-    path('transfers/accept/', views.TicketTransferAcceptView.as_view(), name='transfer_accept'),
-    path('transfers/cancel/', views.TicketTransferCancelView.as_view(), name='transfer_cancel'),
-    path('transfers/preview/', views.TicketTransferPreviewView.as_view(), name='transfer_preview'),
+    path('mypage/wallet-pass/<uuid:ticket_id>/', views.WalletPassView.as_view(), name='wallet_pass'),
+
+    # Ticket share endpoints (view-only)
+    path('shares/create/', views.TicketShareCreateView.as_view(), name='ticket_share_create'),
+    path('shares/revoke/', views.TicketShareRevokeView.as_view(), name='ticket_share_revoke'),
+    path('shares/<str:token>/', views.TicketShareDetailView.as_view(), name='ticket_share_detail'),
     
     # Chat endpoints
     path('chat/messages/', views.ChatMessageView.as_view(), name='chat_messages'),
@@ -64,6 +62,13 @@ urlpatterns = [
     path('admin/system/cache/', views.CacheManagementView.as_view(), name='cache_management'),
     path('admin/system/users/', views.UserManagementView.as_view(), name='user_management'),
     path('admin/system/export/', views.DataExportView.as_view(), name='data_export'),
+    path('admin/system/settings/history/', views.SystemSettingHistoryView.as_view(), name='system_setting_history'),
+    path('admin/system/settings/rollback/', views.SystemSettingRollbackView.as_view(), name='system_setting_rollback'),
+    path('admin/audit/search/', views.AdminAuditSearchView.as_view(), name='admin_audit_search'),
+    path('admin/audit/export/', views.AdminAuditExportView.as_view(), name='admin_audit_export'),
+    path('admin/support/search/', views.AdminSupportSearchView.as_view(), name='admin_support_search'),
+    path('admin/support/action/', views.AdminSupportActionView.as_view(), name='admin_support_action'),
+    path('admin/bulk/', views.AdminBulkOperationView.as_view(), name='admin_bulk'),
     
     # Email Settings endpoints
     path('admin/email-settings/', views.EmailSettingsView.as_view(), name='email_settings'),

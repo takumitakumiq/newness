@@ -7,7 +7,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage, ChatMessageRead
+from .models import EntrySlot, AttributeConfig, Reservation, Ticket, Announcement, ChatMessage
 
 
 class EntrySlotSerializer(serializers.ModelSerializer):
@@ -20,7 +20,7 @@ class EntrySlotSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'event_date', 'start_time', 'end_time',
             'capacity', 'booked_count', 'remaining',
-            'availability_status', 'is_active'
+            'availability_status', 'is_active', 'entry_closed'
         ]
         read_only_fields = ['booked_count', 'remaining', 'availability_status']
 
@@ -346,77 +346,6 @@ class AnnouncementSerializer(serializers.ModelSerializer):
 
 
 # === Ticket Transfer Serializers ===
-
-class TicketTransferSerializer(serializers.ModelSerializer):
-    """チケット譲渡シリアライザー"""
-    ticket_detail = TicketSerializer(source='ticket', read_only=True)
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
-    
-    class Meta:
-        model = TicketTransfer
-        fields = [
-            'id', 'ticket', 'ticket_detail', 'from_user', 'to_user',
-            'transfer_token', 'status', 'status_display',
-            'expires_at', 'created_at', 'accepted_at'
-        ]
-        read_only_fields = ['id', 'from_user', 'transfer_token', 'created_at', 'accepted_at']
-
-
-class TicketTransferCreateSerializer(serializers.Serializer):
-    """チケット譲渡作成用"""
-    ticket_id = serializers.UUIDField()
-    
-    def validate_ticket_id(self, value):
-        user = self.context.get('request').user
-        try:
-            ticket = Ticket.objects.get(id=value, reservation__user=user)
-        except Ticket.DoesNotExist:
-            raise serializers.ValidationError("チケットが見つからないか、権限がありません。")
-        
-        if ticket.status != Ticket.Status.VALID:
-            raise serializers.ValidationError("有効なチケットのみ譲渡できます。")
-        
-        # Check if there's already a pending transfer (that hasn't expired)
-        pending_transfer = TicketTransfer.objects.filter(
-            ticket=ticket, 
-            status=TicketTransfer.Status.PENDING,
-            expires_at__gt=timezone.now()
-        ).first()
-        
-        if pending_transfer:
-            raise serializers.ValidationError("このチケットには既に保留中の譲渡があります。")
-        
-        # Auto-expire old pending transfers
-        TicketTransfer.objects.filter(
-            ticket=ticket,
-            status=TicketTransfer.Status.PENDING,
-            expires_at__lte=timezone.now()
-        ).update(status=TicketTransfer.Status.EXPIRED)
-        
-        return value
-
-
-class TicketTransferAcceptSerializer(serializers.Serializer):
-    """
-    チケット譲渡受取用
-    
-    Note: 基本的なバリデーションのみ行う。
-    TOCTOU対策のため、詳細なステータスチェックはView側でロック取得後に再実行する。
-    """
-    transfer_token = serializers.CharField(max_length=64)
-    
-    def validate_transfer_token(self, value):
-        # 存在確認のみ（詳細チェックはView側でロック後に行う）
-        if not TicketTransfer.objects.filter(transfer_token=value).exists():
-            raise serializers.ValidationError("無効な譲渡リンクです。")
-        return value
-
-
-class PromoCodeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PromoCode
-        fields = '__all__'
-
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     """スタッフチャットメッセージ用シリアライザー"""

@@ -14,6 +14,7 @@ export interface EntrySlot {
   remaining: number;
   availability_status: 'available' | 'limited' | 'few_left' | 'sold_out';
   is_active: boolean;
+  entry_closed?: boolean;
 }
 
 export interface FormFieldCondition {

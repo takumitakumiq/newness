@@ -199,6 +199,28 @@
   background-color: rgba(255, 255, 255, 0.9);
 }
 
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: #111 !important;
+  }
+
+  .print-area {
+    display: block !important;
+  }
+
+  .glass {
+    background: white !important;
+    border-color: #e5e7eb !important;
+    box-shadow: none !important;
+  }
+}
+
 /* Dark mode specific styles */
 .dark .text-foreground {
   color: hsl(0 0% 98%);

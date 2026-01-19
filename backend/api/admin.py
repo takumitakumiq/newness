@@ -3,13 +3,17 @@ MATSU - Django Admin Configuration with Unfold
 """
 from django.contrib import admin
 from unfold.admin import ModelAdmin
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode
+from .models import (
+    EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement,
+    TicketShareLink, AdminActionLog, EmailDeliveryLog, ShareLinkAccessLog,
+    SystemSetting, SystemSettingHistory, UserProfile
+)
 
 
 @admin.register(EntrySlot)
 class EntrySlotAdmin(ModelAdmin):
-    list_display = ['event_date', 'start_time', 'end_time', 'capacity', 'booked_count', 'remaining', 'occupancy_rate', 'is_active']
-    list_filter = ['event_date', 'is_active']
+    list_display = ['event_date', 'start_time', 'end_time', 'capacity', 'booked_count', 'remaining', 'occupancy_rate', 'is_active', 'entry_closed']
+    list_filter = ['event_date', 'is_active', 'entry_closed']
     search_fields = ['event_date']
     ordering = ['event_date', 'start_time']
     
@@ -95,19 +99,61 @@ class AnnouncementAdmin(ModelAdmin):
     readonly_fields = ['id', 'created_at', 'updated_at']
 
 
-@admin.register(TicketTransfer)
-class TicketTransferAdmin(ModelAdmin):
-    list_display = ['ticket', 'from_user', 'to_user', 'status', 'expires_at', 'created_at']
-    list_filter = ['status', 'created_at']
-    search_fields = ['ticket__id', 'from_user__username', 'to_user__username', 'transfer_token']
+@admin.register(TicketShareLink)
+class TicketShareLinkAdmin(ModelAdmin):
+    list_display = ['ticket', 'token', 'expires_at', 'revoked_at', 'created_by', 'access_count', 'max_accesses', 'created_at']
+    list_filter = ['revoked_at', 'created_at']
+    search_fields = ['token', 'ticket__id', 'created_by__username']
     ordering = ['-created_at']
-    readonly_fields = ['id', 'transfer_token', 'created_at', 'accepted_at']
+    readonly_fields = ['id', 'token', 'ticket', 'created_by', 'expires_at', 'revoked_at', 'created_at', 'access_count', 'max_accesses', 'last_accessed_at']
 
 
-@admin.register(PromoCode)
-class PromoCodeAdmin(ModelAdmin):
-    list_display = ['code', 'discount_amount', 'is_active', 'valid_from', 'valid_until', 'usage_limit', 'used_count']
-    list_filter = ['is_active', 'valid_from', 'valid_until']
-    search_fields = ['code']
+@admin.register(AdminActionLog)
+class AdminActionLogAdmin(ModelAdmin):
+    list_display = ['actor', 'action', 'target_type', 'target_id', 'created_at']
+    list_filter = ['action', 'created_at']
+    search_fields = ['actor__username', 'target_id', 'target_type']
     ordering = ['-created_at']
-    readonly_fields = ['used_count', 'created_at']
+    readonly_fields = ['id', 'actor', 'action', 'target_type', 'target_id', 'metadata', 'created_at']
+
+
+@admin.register(EmailDeliveryLog)
+class EmailDeliveryLogAdmin(ModelAdmin):
+    list_display = ['to_email', 'subject', 'mode', 'success', 'created_at']
+    list_filter = ['mode', 'success', 'created_at']
+    search_fields = ['to_email', 'subject']
+    ordering = ['-created_at']
+    readonly_fields = ['id', 'to_email', 'subject', 'mode', 'success', 'provider_message', 'reservation', 'ticket', 'created_by', 'metadata', 'created_at']
+
+
+@admin.register(ShareLinkAccessLog)
+class ShareLinkAccessLogAdmin(ModelAdmin):
+    list_display = ['share_link', 'ticket', 'success', 'ip_address', 'created_at']
+    list_filter = ['success', 'created_at']
+    search_fields = ['share_link__token', 'ticket__id', 'ip_address']
+    ordering = ['-created_at']
+    readonly_fields = ['id', 'share_link', 'ticket', 'ip_address', 'user_agent', 'success', 'message', 'created_at']
+
+
+@admin.register(SystemSetting)
+class SystemSettingAdmin(ModelAdmin):
+    list_display = ['emergency_stop', 'maintenance_mode', 'operation_mode', 'email_mode', 'updated_at']
+    readonly_fields = ['updated_at', 'updated_by']
+
+
+@admin.register(SystemSettingHistory)
+class SystemSettingHistoryAdmin(ModelAdmin):
+    list_display = ['action', 'created_by', 'created_at']
+    list_filter = ['action', 'created_at']
+    search_fields = ['action', 'created_by__username']
+    ordering = ['-created_at']
+    readonly_fields = ['id', 'system_setting', 'action', 'snapshot', 'created_by', 'created_at']
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(ModelAdmin):
+    list_display = ['user', 'verification_status', 'verification_updated_at', 'updated_at']
+    list_filter = ['verification_status', 'updated_at']
+    search_fields = ['user__username', 'user__email']
+    ordering = ['-updated_at']
+

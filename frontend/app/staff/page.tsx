@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QrCode, MessageSquare, Users, CheckCircle, Clock, TrendingUp } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface StaffStats {
   todayCheckins: number;
@@ -22,19 +23,12 @@ export default function StaffDashboard() {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const token = localStorage.getItem("access_token");
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-        const res = await fetch(`${apiUrl}/api/admin/statistics/`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const data = await fetchApi<{ summary?: { checked_in_count?: number; total_tickets?: number; cancelled_count?: number } }>("/admin/statistics");
+        setStats({
+          todayCheckins: data.summary?.checked_in_count || 0,
+          totalTickets: data.summary?.total_tickets || 0,
+          pendingCheckins: (data.summary?.total_tickets || 0) - (data.summary?.checked_in_count || 0) - (data.summary?.cancelled_count || 0),
         });
-        if (res.ok) {
-          const data = await res.json();
-          setStats({
-            todayCheckins: data.summary?.checked_in_count || 0,
-            totalTickets: data.summary?.total_tickets || 0,
-            pendingCheckins: (data.summary?.total_tickets || 0) - (data.summary?.checked_in_count || 0) - (data.summary?.cancelled_count || 0),
-          });
-        }
       } catch (error) {
         console.error("Failed to fetch stats", error);
       } finally {

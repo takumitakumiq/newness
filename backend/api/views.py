@@ -8,21 +8,29 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.shortcuts import render
 from django.views import View
 from django.contrib.admin.views.decorators import staff_member_required
 from django.utils.decorators import method_decorator
 from django.http import HttpResponse
+import os
 import json
 import csv
-import secrets
+import shutil
 from datetime import timedelta
+from datetime import datetime
+import secrets
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction, models
-from django.db.models import Count, Sum
+from django.db.models import Count
 from django.contrib.auth.models import User
 
-from .models import EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement, TicketTransfer, PromoCode, ChatMessage, SystemSetting, ChatMessageRead
+from .models import (
+    EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement,
+    ChatMessage, SystemSetting, ChatMessageRead, AdminActionLog, TicketShareLink,
+    EmailDeliveryLog, ShareLinkAccessLog, UserProfile, SystemSettingHistory
+)
 from .serializers import (
     EntrySlotSerializer, AttributeConfigSerializer,
     ReservationSerializer, ReservationListSerializer, TicketSerializer,
@@ -30,10 +38,189 @@ from .serializers import (
     CheckInRequestSerializer, CheckInResponseSerializer,
     UserRegistrationSerializer, UserSerializer, UserProfileUpdateSerializer,
     TicketUpdateSerializer, TicketCancelSerializer,
-    AnnouncementSerializer, TicketTransferSerializer,
-    TicketTransferCreateSerializer, TicketTransferAcceptSerializer,
-    PromoCodeSerializer
+    AnnouncementSerializer
 )
+from .permissions import ShareAccessThrottle, EmailOpsThrottle
+from .passkit import build_pass_payload, build_pkpass
+
+PASSKIT_REQUIRED_ENV = [
+    "PASSKIT_TEAM_ID",
+    "PASSKIT_PASS_TYPE_ID",
+    "PASSKIT_ORG_NAME",
+    "PASSKIT_CERT_PATH",
+    "PASSKIT_KEY_PATH",
+    "PASSKIT_WWDR_CERT_PATH",
+]
+
+
+def _parse_before_datetime(before: str):
+    if not before:
+        return None
+    try:
+        return parse_datetime(before)
+    except (ValueError, TypeError):
+        return None
+
+
+def _paginate_with_has_more(queryset, limit: int):
+    messages = list(queryset[:limit + 1])
+    has_more = len(messages) > limit
+    if has_more:
+        messages = messages[:limit]
+    return messages, has_more
+
+
+def _build_sales_trend(days: int = 7):
+    today = timezone.now().date()
+    last_days = [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
+    trend = []
+    for date in last_days:
+        count = Ticket.objects.filter(created_at__date=date).count()
+        trend.append({
+            'date': date.strftime('%Y-%m-%d'),
+            'count': count
+        })
+    return trend
+
+
+def _build_recent_activity(limit: int = 10):
+    recent_activity = CheckInLog.objects.select_related('ticket__reservation').order_by('-created_at')[:limit]
+    return [
+        {
+            'action': log.action,
+            'ticket_id': str(log.ticket.id),
+            'user_name': log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown',
+            'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'success': log.success
+        }
+        for log in recent_activity
+    ]
+
+
+def _build_chat_response(data, messages, has_more: bool):
+    response = Response(data)
+    response['X-Has-More'] = 'true' if has_more else 'false'
+    if messages:
+        response['X-Oldest-Id'] = str(messages[-1].id)
+        response['X-Oldest-Created-At'] = messages[-1].created_at.isoformat()
+    return response
+
+
+def _log_admin_action(request, action: str, target_type: str = "", target_id: str = "", metadata: dict | None = None):
+    AdminActionLog.objects.create(
+        actor=request.user if request and request.user.is_authenticated else None,
+        action=action,
+        target_type=target_type or "",
+        target_id=str(target_id) if target_id else "",
+        metadata=metadata or {},
+    )
+
+
+GROUP_ADMIN_READ = "admin_read"
+GROUP_ADMIN_OPS = "admin_ops"
+GROUP_ADMIN_EMERGENCY = "admin_emergency"
+
+
+def _user_in_group(user, group_name: str) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return user.groups.filter(name=group_name).exists()
+
+
+def _require_group(request, group_name: str):
+    if _user_in_group(request.user, group_name):
+        return None
+    return Response({'success': False, 'message': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _require_any_group(request, group_names: list[str]):
+    if any(_user_in_group(request.user, name) for name in group_names):
+        return None
+    return Response({'success': False, 'message': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _build_diff(before: dict, after: dict):
+    diff = {}
+    for key in set(before.keys()) | set(after.keys()):
+        if before.get(key) != after.get(key):
+            diff[key] = {
+                "before": before.get(key),
+                "after": after.get(key)
+            }
+    return diff
+
+
+def _mask_setting_snapshot(snapshot: dict) -> dict:
+    masked = dict(snapshot)
+    if masked.get("sendgrid_api_key"):
+        api_key = masked.get("sendgrid_api_key") or ""
+        masked["sendgrid_api_key"] = api_key[:4] + "*" * max(0, len(api_key) - 8) + api_key[-4:]
+    return masked
+
+
+def _create_system_setting_history(setting: SystemSetting, request, action: str):
+    SystemSettingHistory.objects.create(
+        system_setting=setting,
+        action=action,
+        snapshot=setting.to_snapshot(),
+        created_by=request.user if request and request.user.is_authenticated else None,
+    )
+
+
+def _get_client_ip(request) -> str:
+    xff = request.META.get("HTTP_X_FORWARDED_FOR")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR", "")
+
+
+def _check_checkout_block(setting: SystemSetting):
+    if setting.maintenance_mode:
+        return Response({"success": False, "message": "メンテナンス中のため購入できません"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    if setting.operation_mode in [
+        SystemSetting.OperationMode.READ_ONLY,
+        SystemSetting.OperationMode.PURCHASE_STOP,
+        SystemSetting.OperationMode.CHECKIN_ONLY,
+    ]:
+        return Response({"success": False, "message": "現在、購入が停止されています"}, status=status.HTTP_423_LOCKED)
+    return None
+
+
+def _check_checkin_block(setting: SystemSetting):
+    if setting.emergency_stop:
+        return Response({"success": False, "message": setting.emergency_message or "緊急停止中です"}, status=status.HTTP_423_LOCKED)
+    if setting.maintenance_mode:
+        return Response({"success": False, "message": "メンテナンス中のためチェックインできません"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    if setting.operation_mode == SystemSetting.OperationMode.READ_ONLY:
+        return Response({"success": False, "message": "読み取り専用モードのためチェックインできません"}, status=status.HTTP_423_LOCKED)
+    return None
+
+
+def _get_checkin_block_info(ticket: Ticket):
+    if ticket.slot and getattr(ticket.slot, "entry_closed", False):
+        return {
+            "action": "entry_closed",
+            "message": "この入場枠は締切済みです",
+            "status": "entry_closed",
+            "http_status": status.HTTP_423_LOCKED,
+        }
+    if ticket.status == Ticket.Status.ENTERED:
+        return {
+            "action": "already_entered",
+            "message": "既に入場済みです",
+            "status": "already_entered",
+            "http_status": status.HTTP_409_CONFLICT,
+        }
+    if ticket.status == Ticket.Status.CANCELLED:
+        return {
+            "action": "cancelled",
+            "message": "このチケットは無効です",
+            "status": "cancelled",
+            "http_status": status.HTTP_410_GONE,
+        }
+    return None
 
 
 class EntrySlotViewSet(viewsets.ModelViewSet):
@@ -119,15 +306,22 @@ class TicketViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def by_user(self, request):
         """Get tickets by guest_identifier (via reservation)."""
-        guest_id = request.query_params.get('guest_identifier')
-        if not guest_id:
+        guest_identifier = request.query_params.get('guest_identifier')
+        user_id = request.query_params.get('user_id')
+        if not guest_identifier and not user_id:
             return Response(
-                {"success": False, "message": "guest_identifier is required"},
+                {"success": False, "message": "guest_identifier or user_id is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        tickets = Ticket.objects.filter(
-            reservation__guest_identifier=guest_id
-        ).select_related('slot', 'attribute', 'reservation')
+        if guest_identifier:
+            tickets = Ticket.objects.filter(
+                reservation__guest_identifier=guest_identifier
+            )
+        else:
+            tickets = Ticket.objects.filter(
+                reservation__user__id=user_id
+            )
+        tickets = tickets.select_related('slot', 'attribute', 'reservation')
         serializer = self.get_serializer(tickets, many=True)
         return Response(serializer.data)
     
@@ -143,20 +337,29 @@ class TicketViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        serializer = TicketCancelSerializer(data={}, context={'ticket': ticket})
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
         # キャンセル処理
         with transaction.atomic():
+            # ロック取得後に再検証
+            ticket = Ticket.objects.select_for_update().select_related('attribute', 'slot', 'reservation').get(id=ticket.id)
+            serializer = TicketCancelSerializer(data={}, context={'ticket': ticket})
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
             ticket.status = Ticket.Status.CANCELLED
             ticket.save()
             
             # 在庫を戻す
-            slot = ticket.slot
-            EntrySlot.objects.filter(id=slot.id).update(
+            EntrySlot.objects.filter(id=ticket.slot_id).update(
                 booked_count=models.F('booked_count') - 1
             )
+
+        _log_admin_action(
+            request,
+            action="ticket_cancel",
+            target_type="ticket",
+            target_id=str(ticket.id),
+            metadata={"reservation_id": str(ticket.reservation_id)}
+        )
 
         return Response({"status": "cancelled", "message": "チケットをキャンセルしました。"})
 
@@ -186,6 +389,10 @@ class CheckoutView(APIView):
     """
     
     def post(self, request):
+        setting = SystemSetting.get_instance()
+        blocked = _check_checkout_block(setting)
+        if blocked:
+            return blocked
         serializer = CheckoutRequestSerializer(data=request.data, context={'request': request})
         
         if not serializer.is_valid():
@@ -196,6 +403,29 @@ class CheckoutView(APIView):
         
         try:
             reservation = serializer.save()
+
+            # 予約完了メール（失敗しても購入は成功扱い）
+            try:
+                if reservation.user_email:
+                    from .email_service import email_service
+                    ticket_rows = []
+                    for t in reservation.tickets.select_related('slot', 'attribute'):
+                        ticket_rows.append({
+                            'guest_name': t.guest_info.get('name', '未入力') if t.guest_info else '未入力',
+                            'slot_date': t.slot.event_date.isoformat() if t.slot else '',
+                            'slot_time': t.slot.start_time.strftime('%H:%M') if t.slot else '',
+                            'attribute_name': t.attribute.display_name if t.attribute else ''
+                        })
+                    user_name = reservation.user_name or reservation.guest_identifier or "お客様"
+                    email_service.send_reservation_confirmation(
+                        reservation.user_email,
+                        reservation.id,
+                        user_name,
+                        ticket_rows,
+                        context={"reservation": reservation}
+                    )
+            except Exception:
+                pass
             
             response_data = {
                 'reservation_id': reservation.id,
@@ -231,6 +461,10 @@ class CheckInView(APIView):
     
     @transaction.atomic
     def post(self, request):
+        setting = SystemSetting.get_instance()
+        blocked = _check_checkin_block(setting)
+        if blocked:
+            return blocked
         serializer = CheckInRequestSerializer(data=request.data)
         
         if not serializer.is_valid():
@@ -254,24 +488,13 @@ class CheckInView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Check status
-        if ticket.status == Ticket.Status.ENTERED:
-            self._log_checkin(ticket, 'already_entered', False, '既に入場済みです', device_id, operator)
-            return Response(
-                {
-                    "success": False,
-                    "message": "既に入場済みです",
-                    "ticket": TicketSerializer(ticket).data
-                },
-                status=status.HTTP_409_CONFLICT
-            )
-        
-        if ticket.status == Ticket.Status.CANCELLED:
-            self._log_checkin(ticket, 'cancelled', False, 'このチケットは無効です', device_id, operator)
-            return Response(
-                {"success": False, "message": "このチケットは無効です"},
-                status=status.HTTP_410_GONE
-            )
+        block_info = _get_checkin_block_info(ticket)
+        if block_info:
+            self._log_checkin(ticket, block_info["action"], False, block_info["message"], device_id, operator)
+            payload = {"success": False, "message": block_info["message"]}
+            if block_info["action"] == "already_entered":
+                payload["ticket"] = TicketSerializer(ticket).data
+            return Response(payload, status=block_info["http_status"])
         
         # Valid ticket - mark as entered
         ticket.status = Ticket.Status.ENTERED
@@ -325,6 +548,10 @@ class BatchCheckInView(APIView):
     permission_classes = [IsAdminUser]
     
     def post(self, request):
+        setting = SystemSetting.get_instance()
+        blocked = _check_checkin_block(setting)
+        if blocked:
+            return blocked
         checkins = request.data.get('checkins', [])
         if not checkins:
             return Response(
@@ -367,22 +594,13 @@ class BatchCheckInView(APIView):
                         failed_count += 1
                         continue
                     
-                    if ticket.status == Ticket.Status.ENTERED:
+                    block_info = _get_checkin_block_info(ticket)
+                    if block_info:
                         results.append({
                             "ticket_uuid": ticket_uuid,
                             "success": False,
-                            "message": "既に入場済みです",
-                            "status": "already_entered"
-                        })
-                        failed_count += 1
-                        continue
-                    
-                    if ticket.status == Ticket.Status.CANCELLED:
-                        results.append({
-                            "ticket_uuid": ticket_uuid,
-                            "success": False,
-                            "message": "このチケットは無効です",
-                            "status": "cancelled"
+                            "message": block_info["message"],
+                            "status": block_info["status"]
                         })
                         failed_count += 1
                         continue
@@ -546,6 +764,200 @@ class MyTicketsView(generics.ListAPIView):
         ).select_related('slot', 'attribute', 'reservation')
 
 
+class TicketShareCreateView(APIView):
+    """
+    POST /api/shares/create
+    閲覧専用の共有リンクを作成
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ticket_id = request.data.get('ticket_id')
+        expires_in_hours = request.data.get('expires_in_hours', 24)
+        max_accesses = request.data.get('max_accesses', 0)
+
+        if not ticket_id:
+            return Response(
+                {"success": False, "message": "ticket_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            expires_in_hours = int(expires_in_hours)
+        except (TypeError, ValueError):
+            expires_in_hours = 24
+
+        try:
+            max_accesses = int(max_accesses)
+        except (TypeError, ValueError):
+            max_accesses = 0
+
+        expires_in_hours = max(1, min(expires_in_hours, 168))
+
+        ticket = Ticket.objects.select_related('reservation').filter(id=ticket_id).first()
+        if not ticket or ticket.reservation.user != request.user:
+            return Response(
+                {"success": False, "message": "チケットが見つかりません"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        token = secrets.token_urlsafe(24)[:64]
+        expires_at = timezone.now() + timedelta(hours=expires_in_hours)
+
+        share = TicketShareLink.objects.create(
+            token=token,
+            ticket=ticket,
+            created_by=request.user,
+            expires_at=expires_at,
+            max_accesses=max(0, max_accesses)
+        )
+
+        _log_admin_action(
+            request,
+            action="ticket_share_create",
+            target_type="ticket",
+            target_id=str(ticket.id),
+            metadata={"expires_at": share.expires_at.isoformat(), "max_accesses": share.max_accesses}
+        )
+
+        return Response({
+            "success": True,
+            "token": share.token,
+            "expires_at": share.expires_at.isoformat(),
+            "max_accesses": share.max_accesses
+        })
+
+
+class TicketShareRevokeView(APIView):
+    """
+    POST /api/shares/revoke
+    共有リンクを無効化
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        token = request.data.get('token')
+        if not token:
+            return Response(
+                {"success": False, "message": "token is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        share = TicketShareLink.objects.select_related('ticket__reservation').filter(
+            token=token,
+            revoked_at__isnull=True
+        ).first()
+
+        if not share or share.ticket.reservation.user != request.user:
+            return Response(
+                {"success": False, "message": "共有リンクが見つかりません"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        share.revoked_at = timezone.now()
+        share.save(update_fields=["revoked_at"])
+
+        _log_admin_action(
+            request,
+            action="ticket_share_revoke",
+            target_type="ticket",
+            target_id=str(share.ticket_id)
+        )
+
+        return Response({"success": True})
+
+
+class TicketShareDetailView(APIView):
+    """
+    GET /api/shares/<token>
+    閲覧専用共有リンクの内容を取得
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [ShareAccessThrottle]
+
+    @transaction.atomic
+    def get(self, request, token):
+        share = TicketShareLink.objects.select_for_update().select_related(
+            'ticket__reservation', 'ticket__slot', 'ticket__attribute'
+        ).filter(token=token).first()
+        if not share:
+            return Response({"success": False, "message": "共有リンクが見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not share.is_active():
+            ShareLinkAccessLog.objects.create(
+                share_link=share,
+                ticket=share.ticket,
+                ip_address=_get_client_ip(request),
+                user_agent=request.META.get("HTTP_USER_AGENT", "")[:1000],
+                success=False,
+                message="invalid_or_expired",
+            )
+            return Response({"success": False, "message": "共有リンクの有効期限が切れています"}, status=status.HTTP_410_GONE)
+
+        share.access_count = (share.access_count or 0) + 1
+        share.last_accessed_at = timezone.now()
+        share.save(update_fields=["access_count", "last_accessed_at"])
+
+        ShareLinkAccessLog.objects.create(
+            share_link=share,
+            ticket=share.ticket,
+            ip_address=_get_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", "")[:1000],
+            success=True,
+        )
+
+        data = TicketSerializer(share.ticket).data
+
+        return Response({
+            "success": True,
+            "ticket_id": str(share.ticket_id),
+            "expires_at": share.expires_at.isoformat(),
+            "access_count": share.access_count,
+            "max_accesses": share.max_accesses,
+            "ticket": data
+        })
+
+
+class WalletPassView(APIView):
+    """
+    GET /api/mypage/wallet-pass/<ticket_id>/
+    Apple Wallet用のPKPassを発行する（要設定）
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, ticket_id):
+        try:
+            ticket = Ticket.objects.select_related('slot', 'attribute', 'reservation').get(id=ticket_id)
+        except Ticket.DoesNotExist:
+            return Response({"message": "チケットが見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 権限チェック
+        if not request.user.is_staff and ticket.reservation.user != request.user:
+            return Response({"message": "権限がありません"}, status=status.HTTP_403_FORBIDDEN)
+
+        missing = [k for k in PASSKIT_REQUIRED_ENV if not os.environ.get(k)]
+        if missing:
+            return Response(
+                {
+                    "message": "Apple Walletの発行設定が未完了です",
+                    "missing": missing,
+                },
+                status=status.HTTP_501_NOT_IMPLEMENTED,
+            )
+
+        try:
+            pass_data = build_pass_payload(ticket)
+            pkpass_bytes = build_pkpass(pass_data)
+        except Exception as e:
+            return Response({"message": f"PKPass生成に失敗しました: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        response = HttpResponse(pkpass_bytes, content_type="application/vnd.apple.pkpass")
+        response["Content-Disposition"] = f"attachment; filename=ticket-{ticket.id}.pkpass"
+        return response
+
+
+
+
 class AdminStatisticsView(APIView):
     """
     GET /api/admin/statistics/
@@ -554,10 +966,19 @@ class AdminStatisticsView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         total_reservations = Reservation.objects.count()
         total_tickets = Ticket.objects.count()
         checked_in_count = Ticket.objects.filter(status=Ticket.Status.ENTERED).count()
         cancelled_count = Ticket.objects.filter(status=Ticket.Status.CANCELLED).count()
+        total_checkin_logs = CheckInLog.objects.count()
+        failed_checkins = CheckInLog.objects.filter(success=False).count()
+        total_emails = EmailDeliveryLog.objects.count()
+        failed_emails = EmailDeliveryLog.objects.filter(success=False).count()
+        admin_action_count = AdminActionLog.objects.count()
+        share_access_count = ShareLinkAccessLog.objects.count()
         
         # Tickets by attribute
         tickets_by_attribute = Ticket.objects.values(
@@ -573,29 +994,17 @@ class AdminStatisticsView(APIView):
             count=Count('id')
         ).order_by('slot__event_date', 'slot__start_time')
 
-        # Sales Trend (Last 7 days)
-        today = timezone.now().date()
-        last_7_days = [today - timedelta(days=i) for i in range(6, -1, -1)]
-        sales_trend = []
-        
-        for date in last_7_days:
-            count = Ticket.objects.filter(created_at__date=date).count()
-            sales_trend.append({
-                'date': date.strftime('%Y-%m-%d'),
-                'count': count
-            })
+        sales_trend = _build_sales_trend()
+        recent_activity_data = _build_recent_activity()
 
-        # Recent Activity (Check-ins)
-        recent_activity = CheckInLog.objects.select_related('ticket__reservation').order_by('-created_at')[:10]
-        recent_activity_data = []
-        for log in recent_activity:
-            recent_activity_data.append({
-                'action': log.action,
-                'ticket_id': str(log.ticket.id),
-                'user_name': log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown',
-                'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'success': log.success
-            })
+        share_spikes = ShareLinkAccessLog.objects.values('share_link_id', 'ticket_id').annotate(
+            count=Count('id')
+        ).filter(count__gte=20).order_by('-count')[:10]
+
+        duplicate_checkins = CheckInLog.objects.values('ticket_id').annotate(
+            total=Count('id'),
+            device_count=Count('device_id', distinct=True)
+        ).filter(device_count__gt=1).order_by('-device_count')[:10]
 
         return Response({
             "summary": {
@@ -603,12 +1012,20 @@ class AdminStatisticsView(APIView):
                 "total_tickets": total_tickets,
                 "checked_in_count": checked_in_count,
                 "cancelled_count": cancelled_count,
-                "check_in_rate": round((checked_in_count / total_tickets * 100), 1) if total_tickets > 0 else 0
+                "check_in_rate": round((checked_in_count / total_tickets * 100), 1) if total_tickets > 0 else 0,
+                "checkin_error_rate": round((failed_checkins / total_checkin_logs * 100), 1) if total_checkin_logs > 0 else 0,
+                "email_failure_rate": round((failed_emails / total_emails * 100), 1) if total_emails > 0 else 0,
+                "admin_action_count": admin_action_count,
+                "share_access_count": share_access_count,
             },
             "by_attribute": tickets_by_attribute,
             "by_slot": tickets_by_slot,
             "sales_trend": sales_trend,
-            "recent_activity": recent_activity_data
+            "recent_activity": recent_activity_data,
+            "anomalies": {
+                "share_spikes": list(share_spikes),
+                "duplicate_checkins": list(duplicate_checkins),
+            }
         })
 
 
@@ -641,29 +1058,8 @@ class AdminDashboardPageView(View):
             slot['slot__event_date'] = str(slot['slot__event_date'])
             slot['slot__start_time'] = str(slot['slot__start_time'])
 
-        # Sales Trend (Last 7 days)
-        today = timezone.now().date()
-        last_7_days = [today - timedelta(days=i) for i in range(6, -1, -1)]
-        sales_trend = []
-        
-        for date in last_7_days:
-            count = Ticket.objects.filter(created_at__date=date).count()
-            sales_trend.append({
-                'date': date.strftime('%Y-%m-%d'),
-                'count': count
-            })
-
-        # Recent Activity (Check-ins)
-        recent_activity = CheckInLog.objects.select_related('ticket__reservation').order_by('-created_at')[:10]
-        recent_activity_data = []
-        for log in recent_activity:
-            recent_activity_data.append({
-                'action': log.action,
-                'ticket_id': str(log.ticket.id),
-                'user_name': log.ticket.reservation.user_name if log.ticket and log.ticket.reservation else 'Unknown',
-                'timestamp': log.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                'success': log.success
-            })
+        sales_trend = _build_sales_trend()
+        recent_activity_data = _build_recent_activity()
 
         # All Tickets (for Visitor List)
         all_tickets = Ticket.objects.select_related('reservation', 'attribute', 'slot').order_by('-created_at')
@@ -794,6 +1190,10 @@ class ManualCheckInView(APIView):
     
     @transaction.atomic
     def post(self, request):
+        setting = SystemSetting.get_instance()
+        blocked = _check_checkin_block(setting)
+        if blocked:
+            return blocked
         """手動チェックイン実行"""
         ticket_id = request.data.get('ticket_id')
         # 🔒 セキュリティ修正: operatorは常にログインユーザーから取得（偽装防止）
@@ -807,16 +1207,12 @@ class ManualCheckInView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        if ticket.status == Ticket.Status.ENTERED:
+        block_info = _get_checkin_block_info(ticket)
+        if block_info:
+            message = "このチケットはキャンセル済みです" if block_info["action"] == "cancelled" else block_info["message"]
             return Response(
-                {"success": False, "message": "既に入場済みです"},
-                status=status.HTTP_409_CONFLICT
-            )
-        
-        if ticket.status == Ticket.Status.CANCELLED:
-            return Response(
-                {"success": False, "message": "このチケットはキャンセル済みです"},
-                status=status.HTTP_410_GONE
+                {"success": False, "message": message},
+                status=block_info["http_status"]
             )
         
         ticket.status = Ticket.Status.ENTERED
@@ -921,281 +1317,6 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         return Announcement.objects.filter(is_active=True)
 
 
-# === Ticket Transfer Views ===
-
-class TicketTransferCreateView(APIView):
-    """
-    POST /api/transfers/create/
-    チケット譲渡リンクを作成
-    """
-    permission_classes = [IsAuthenticated]
-    
-    @transaction.atomic
-    def post(self, request):
-        serializer = TicketTransferCreateSerializer(data=request.data, context={'request': request})
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        ticket_id = serializer.validated_data['ticket_id']
-        ticket = Ticket.objects.get(id=ticket_id)
-        intended_email = request.data.get('intended_email', '').strip() or None
-        
-        # Generate unique token
-        transfer_token = secrets.token_urlsafe(32)
-        
-        # Create transfer (expires in 48 hours)
-        transfer = TicketTransfer.objects.create(
-            ticket=ticket,
-            from_user=request.user,
-            transfer_token=transfer_token,
-            expires_at=timezone.now() + timedelta(hours=48),
-            intended_email=intended_email
-        )
-        
-        return Response({
-            "success": True,
-            "transfer_token": transfer_token,
-            "transfer_url": f"/transfer/{transfer_token}",
-            "expires_at": transfer.expires_at.isoformat()
-        }, status=status.HTTP_201_CREATED)
-
-
-class TicketTransferCancelView(APIView):
-    """
-    POST /api/transfers/cancel/
-    チケット譲渡をキャンセル（送信者のみ可能）
-    """
-    permission_classes = [IsAuthenticated]
-    
-    @transaction.atomic
-    def post(self, request):
-        transfer_id = request.data.get('transfer_id')
-        if not transfer_id:
-            return Response(
-                {"success": False, "message": "transfer_id is required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            transfer = TicketTransfer.objects.select_for_update().get(id=transfer_id)
-        except TicketTransfer.DoesNotExist:
-            return Response(
-                {"success": False, "message": "譲渡が見つかりません。"},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # 権限チェック: 送信者のみキャンセル可能
-        if transfer.from_user != request.user:
-            return Response(
-                {"success": False, "message": "この譲渡をキャンセルする権限がありません。"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # ステータスチェック: PENDING のみキャンセル可能
-        if transfer.status != TicketTransfer.Status.PENDING:
-            return Response(
-                {"success": False, "message": "この譲渡は既に処理済みです。"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # キャンセル処理
-        transfer.status = TicketTransfer.Status.CANCELLED
-        transfer.save()
-        
-        return Response({
-            "success": True,
-            "message": "譲渡をキャンセルしました。"
-        })
-
-
-class TicketTransferPreviewView(APIView):
-    """
-    GET /api/transfers/preview?token=...
-    譲渡チケットのプレビュー（受け取り前に内容確認）
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        token = request.query_params.get('token')
-        if not token:
-            return Response(
-                {"success": False, "message": "token is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            transfer = TicketTransfer.objects.select_related(
-                'ticket', 'ticket__slot', 'ticket__attribute', 'from_user'
-            ).get(transfer_token=token)
-        except TicketTransfer.DoesNotExist:
-            return Response(
-                {"success": False, "message": "譲渡リンクが見つかりません"},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # ステータスチェック
-        if transfer.status != TicketTransfer.Status.PENDING:
-            return Response({
-                "success": False,
-                "message": "この譲渡は既に処理済みか期限切れです",
-                "status": transfer.status
-            })
-        
-        if timezone.now() > transfer.expires_at:
-            return Response({
-                "success": False,
-                "message": "譲渡リンクの期限が切れています",
-                "status": "expired"
-            })
-        
-        # 譲渡先指定がある場合、このユーザーが対象かチェック
-        is_intended = True
-        if transfer.intended_email:
-            is_intended = request.user.email.lower() == transfer.intended_email.lower()
-        
-        ticket = transfer.ticket
-        return Response({
-            "success": True,
-            "transfer": {
-                "id": str(transfer.id),
-                "status": transfer.status,
-                "expires_at": transfer.expires_at.isoformat(),
-                "from_user": transfer.from_user.username,
-                "intended_email": transfer.intended_email,
-                "is_intended_recipient": is_intended,
-            },
-            "ticket": {
-                "id": str(ticket.id),
-                "status": ticket.status,
-                "guest_info": ticket.guest_info,
-                "slot": {
-                    "event_date": ticket.slot.event_date.isoformat() if ticket.slot else None,
-                    "start_time": ticket.slot.start_time.strftime('%H:%M') if ticket.slot else None,
-                },
-                "attribute": {
-                    "display_name": ticket.attribute.display_name if ticket.attribute else None,
-                }
-            }
-        })
-
-
-class TicketTransferAcceptView(APIView):
-    """
-    POST /api/transfers/accept/
-    チケット譲渡を受け取る
-    """
-    permission_classes = [IsAuthenticated]
-    
-    @transaction.atomic
-    def post(self, request):
-        serializer = TicketTransferAcceptSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        transfer_token = serializer.validated_data['transfer_token']
-        
-        try:
-            # ロックを取得して譲渡レコードを取得
-            transfer = TicketTransfer.objects.select_for_update().select_related('ticket').get(transfer_token=transfer_token)
-        except TicketTransfer.DoesNotExist:
-            return Response(
-                {"success": False, "message": "譲渡リンクが見つかりません。"},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # 🔒 ロック後に再検証（TOCTOU対策）
-        if transfer.status != TicketTransfer.Status.PENDING:
-            return Response(
-                {"success": False, "message": "この譲渡は既に処理済みか期限切れです。"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if timezone.now() > transfer.expires_at:
-            transfer.status = TicketTransfer.Status.EXPIRED
-            transfer.save()
-            return Response(
-                {"success": False, "message": "譲渡リンクの期限が切れています。"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if transfer.ticket.status != Ticket.Status.VALID:
-            return Response(
-                {"success": False, "message": "このチケットは既にキャンセルまたは使用済みです。"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if user is trying to accept their own transfer
-        if transfer.from_user == request.user:
-            return Response(
-                {"success": False, "message": "自分自身に譲渡することはできません。"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # 🔒 譲渡先メール指定チェック
-        if transfer.intended_email:
-            if request.user.email.lower() != transfer.intended_email.lower():
-                return Response(
-                    {"success": False, "message": "この譲渡は別のメールアドレス宛てに送信されています。"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        
-        # Update transfer
-        transfer.to_user = request.user
-        transfer.status = TicketTransfer.Status.ACCEPTED
-        transfer.accepted_at = timezone.now()
-        transfer.save()
-        
-        # Update ticket's reservation to new user
-        ticket = transfer.ticket
-        old_reservation = ticket.reservation
-        
-        # Create new reservation for the new user
-        new_reservation = Reservation.objects.create(
-            user=request.user,
-            user_name=f"{request.user.last_name} {request.user.first_name}".strip() or request.user.username,
-            user_email=request.user.email,
-            total_tickets=1
-        )
-        
-        # Move ticket to new reservation
-        ticket.reservation = new_reservation
-        ticket.save()
-        
-        # Update old reservation count
-        old_reservation.total_tickets = old_reservation.tickets.count()
-        old_reservation.save()
-        
-        # フロント互換: success, message, ticket を返す
-        return Response({
-            "success": True,
-            "message": "チケットを受け取りました。",
-            "ticket": TicketSerializer(ticket).data
-        })
-
-
-class PromoCodeViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint for promo codes.
-    """
-    queryset = PromoCode.objects.all()
-    serializer_class = PromoCodeSerializer
-    permission_classes = [IsAdminUser]
-
-
-class MyTransfersView(generics.ListAPIView):
-    """
-    GET /api/mypage/transfers/
-    自分の譲渡履歴
-    """
-    permission_classes = [IsAuthenticated]
-    serializer_class = TicketTransferSerializer
-    
-    def get_queryset(self):
-        return TicketTransfer.objects.filter(
-            models.Q(from_user=self.request.user) | models.Q(to_user=self.request.user)
-        ).select_related('ticket', 'from_user', 'to_user')
-
-
 # === Chat Views ===
 
 class ChatMessageView(APIView):
@@ -1219,40 +1340,18 @@ class ChatMessageView(APIView):
         queryset = ChatMessage.objects.select_related('sender').order_by('-created_at')
         
         # created_at ベースのカーソル（UUIDではなく時刻で安定させる）
-        if before:
-            try:
-                from django.utils.dateparse import parse_datetime
-                before_dt = parse_datetime(before)
-                if before_dt:
-                    queryset = queryset.filter(created_at__lt=before_dt)
-            except (ValueError, TypeError):
-                pass
+        before_dt = _parse_before_datetime(before)
+        if before_dt:
+            queryset = queryset.filter(created_at__lt=before_dt)
         
         # limit+1 方式で has_more を判定（count() より効率的）
-        messages = list(queryset[:limit + 1])
-        has_more = len(messages) > limit
-        if has_more:
-            messages = messages[:limit]
+        messages, has_more = _paginate_with_has_more(queryset, limit)
         
-        data = []
-        for msg in reversed(messages):
-            data.append({
-                'id': str(msg.id),
-                'user_id': msg.sender.id,
-                'username': msg.sender.username,
-                'content': msg.content,
-                'created_at': msg.created_at.isoformat(),
-                'is_staff': msg.sender.is_staff
-            })
+        data = [msg.to_payload() for msg in reversed(messages)]
         
         # 配列形式で返す（フロント互換維持）
         # ページネーション情報はヘッダで返す
-        response = Response(data)
-        response['X-Has-More'] = 'true' if has_more else 'false'
-        if messages:
-            response['X-Oldest-Id'] = str(messages[-1].id)
-            response['X-Oldest-Created-At'] = messages[-1].created_at.isoformat()
-        return response
+        return _build_chat_response(data, messages, has_more)
     
     def post(self, request):
         content = request.data.get('content', '').strip()
@@ -1273,14 +1372,7 @@ class ChatMessageView(APIView):
             content=content
         )
         
-        return Response({
-            'id': str(msg.id),
-            'user_id': msg.sender.id,
-            'username': msg.sender.username,
-            'content': msg.content,
-            'created_at': msg.created_at.isoformat(),
-            'is_staff': msg.sender.is_staff
-        }, status=status.HTTP_201_CREATED)
+        return Response(msg.to_payload(), status=status.HTTP_201_CREATED)
 
 
 class ChatUnreadCountView(APIView):
@@ -1321,11 +1413,7 @@ class ChatUnreadCountView(APIView):
 
 # === System Administration Views ===
 
-import os
-import shutil
-import subprocess
 from django.conf import settings as django_settings
-from datetime import datetime
 
 
 class SystemHealthView(APIView):
@@ -1336,6 +1424,9 @@ class SystemHealthView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         health_data = {
             'timestamp': timezone.now().isoformat(),
             'status': 'healthy',
@@ -1427,6 +1518,9 @@ class DatabaseBackupView(APIView):
     
     def get(self, request):
         """バックアップ一覧を取得"""
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         backup_dir = os.path.join(django_settings.BASE_DIR, 'backups')
         backups = []
         
@@ -1448,6 +1542,9 @@ class DatabaseBackupView(APIView):
     
     def post(self, request):
         """バックアップを作成"""
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         backup_type = request.data.get('type', 'sqlite')
         
         backup_dir = os.path.join(django_settings.BASE_DIR, 'backups')
@@ -1462,13 +1559,24 @@ class DatabaseBackupView(APIView):
                 dst = os.path.join(backup_dir, f'backup_{timestamp}.sqlite3')
                 shutil.copy2(src, dst)
                 
-                return Response({
+                response = Response({
                     'success': True,
                     'message': 'バックアップを作成しました',
                     'filename': f'backup_{timestamp}.sqlite3',
                     'path': dst,
                     'size_mb': round(os.path.getsize(dst) / (1024**2), 2)
                 }, status=status.HTTP_201_CREATED)
+                _log_admin_action(
+                    request,
+                    action="backup_create",
+                    target_type="backup",
+                    target_id=f'backup_{timestamp}.sqlite3',
+                    metadata={
+                        "type": "sqlite",
+                        "size_mb": round(os.path.getsize(dst) / (1024**2), 2),
+                    },
+                )
+                return response
             
             elif backup_type == 'json':
                 # JSONダンプ
@@ -1488,13 +1596,24 @@ class DatabaseBackupView(APIView):
                 with open(dst, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=2, cls=DjangoJSONEncoder)
                 
-                return Response({
+                response = Response({
                     'success': True,
                     'message': 'JSONバックアップを作成しました',
                     'filename': f'backup_{timestamp}.json',
                     'path': dst,
                     'size_mb': round(os.path.getsize(dst) / (1024**2), 2)
                 }, status=status.HTTP_201_CREATED)
+                _log_admin_action(
+                    request,
+                    action="backup_create",
+                    target_type="backup",
+                    target_id=f'backup_{timestamp}.json',
+                    metadata={
+                        "type": "json",
+                        "size_mb": round(os.path.getsize(dst) / (1024**2), 2),
+                    },
+                )
+                return response
             
             else:
                 return Response({
@@ -1510,6 +1629,9 @@ class DatabaseBackupView(APIView):
     
     def delete(self, request):
         """バックアップを削除"""
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         filename = request.data.get('filename')
         if not filename:
             return Response({'success': False, 'message': 'filename is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1523,6 +1645,12 @@ class DatabaseBackupView(APIView):
         
         if os.path.exists(filepath):
             os.remove(filepath)
+            _log_admin_action(
+                request,
+                action="backup_delete",
+                target_type="backup",
+                target_id=filename,
+            )
             return Response({'success': True, 'message': f'{filename} を削除しました'})
         else:
             return Response({'success': False, 'message': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -1536,6 +1664,9 @@ class SystemLogsView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         log_type = request.query_params.get('type', 'checkin')
         limit = int(request.query_params.get('limit', 100))
         
@@ -1553,8 +1684,494 @@ class SystemLogsView(APIView):
                     for log in logs
                 ]
             })
+
+        if log_type == 'admin':
+            logs = AdminActionLog.objects.select_related('actor').order_by('-created_at')[:limit]
+            return Response({
+                'logs': [
+                    {
+                        'id': str(log.id),
+                        'action': log.action,
+                        'target_type': log.target_type,
+                        'target_id': log.target_id,
+                        'metadata': log.metadata,
+                        'actor': log.actor.username if log.actor else None,
+                        'created_at': log.created_at.isoformat(),
+                    }
+                    for log in logs
+                ]
+            })
         
         return Response({'logs': []})
+
+
+class AdminAuditSearchView(APIView):
+    """
+    GET /api/admin/audit/search
+    監査ログの横断検索
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        denied = _require_any_group(request, [GROUP_ADMIN_READ, "admin_audit"])
+        if denied:
+            return denied
+
+        start = parse_datetime(request.query_params.get('from'))
+        end = parse_datetime(request.query_params.get('to'))
+        actor = request.query_params.get('actor')
+        user_id = request.query_params.get('user_id')
+        ticket_id = request.query_params.get('ticket_id')
+        log_type = request.query_params.get('type')
+
+        items = []
+
+        if not log_type or log_type == 'admin':
+            logs = AdminActionLog.objects.select_related('actor').all()
+            if start:
+                logs = logs.filter(created_at__gte=start)
+            if end:
+                logs = logs.filter(created_at__lte=end)
+            if actor:
+                logs = logs.filter(actor__username__icontains=actor)
+            if user_id:
+                logs = logs.filter(
+                    models.Q(target_type="user", target_id=str(user_id)) |
+                    models.Q(metadata__user_id=str(user_id))
+                )
+            if ticket_id:
+                logs = logs.filter(
+                    models.Q(target_type="ticket", target_id=str(ticket_id)) |
+                    models.Q(metadata__ticket_id=str(ticket_id))
+                )
+            for log in logs[:500]:
+                before = log.metadata.get("before") if isinstance(log.metadata, dict) else None
+                after = log.metadata.get("after") if isinstance(log.metadata, dict) else None
+                diff = _build_diff(before, after) if isinstance(before, dict) and isinstance(after, dict) else {}
+                items.append({
+                    "type": "admin",
+                    "id": str(log.id),
+                    "action": log.action,
+                    "actor": log.actor.username if log.actor else None,
+                    "target_type": log.target_type,
+                    "target_id": log.target_id,
+                    "ticket_id": log.metadata.get("ticket_id") if isinstance(log.metadata, dict) else None,
+                    "user_id": log.metadata.get("user_id") if isinstance(log.metadata, dict) else None,
+                    "message": log.metadata.get("message") if isinstance(log.metadata, dict) else "",
+                    "metadata": log.metadata or {},
+                    "diff": diff,
+                    "created_at": log.created_at.isoformat(),
+                })
+
+        if not log_type or log_type == 'checkin':
+            logs = CheckInLog.objects.select_related('ticket__reservation').all()
+            if start:
+                logs = logs.filter(created_at__gte=start)
+            if end:
+                logs = logs.filter(created_at__lte=end)
+            if actor:
+                logs = logs.filter(operator__icontains=actor)
+            if ticket_id:
+                logs = logs.filter(ticket__id=ticket_id)
+            for log in logs[:500]:
+                items.append({
+                    "type": "checkin",
+                    "id": str(log.id),
+                    "action": log.action,
+                    "actor": log.operator,
+                    "ticket_id": str(log.ticket_id),
+                    "user_id": log.ticket.reservation.user_id if log.ticket and log.ticket.reservation else None,
+                    "message": log.message,
+                    "metadata": {"device_id": log.device_id, "success": log.success},
+                    "diff": {},
+                    "created_at": log.created_at.isoformat(),
+                })
+
+        if not log_type or log_type == 'email':
+            logs = EmailDeliveryLog.objects.select_related('reservation', 'ticket', 'created_by').all()
+            if start:
+                logs = logs.filter(created_at__gte=start)
+            if end:
+                logs = logs.filter(created_at__lte=end)
+            if actor:
+                logs = logs.filter(created_by__username__icontains=actor)
+            if ticket_id:
+                logs = logs.filter(ticket_id=ticket_id)
+            if user_id:
+                logs = logs.filter(reservation__user_id=user_id)
+            for log in logs[:500]:
+                items.append({
+                    "type": "email",
+                    "id": str(log.id),
+                    "action": "email_send",
+                    "actor": log.created_by.username if log.created_by else None,
+                    "ticket_id": str(log.ticket_id) if log.ticket_id else None,
+                    "user_id": log.reservation.user_id if log.reservation else None,
+                    "message": log.provider_message,
+                    "metadata": {
+                        "to_email": log.to_email,
+                        "subject": log.subject,
+                        "mode": log.mode,
+                        "success": log.success,
+                    },
+                    "diff": {},
+                    "created_at": log.created_at.isoformat(),
+                })
+
+        if not log_type or log_type == 'share':
+            logs = ShareLinkAccessLog.objects.select_related('ticket', 'share_link').all()
+            if start:
+                logs = logs.filter(created_at__gte=start)
+            if end:
+                logs = logs.filter(created_at__lte=end)
+            if ticket_id:
+                logs = logs.filter(ticket_id=ticket_id)
+            for log in logs[:500]:
+                items.append({
+                    "type": "share",
+                    "id": str(log.id),
+                    "action": "share_access",
+                    "actor": None,
+                    "ticket_id": str(log.ticket_id),
+                    "user_id": log.ticket.reservation.user_id if log.ticket and log.ticket.reservation else None,
+                    "message": log.message,
+                    "metadata": {
+                        "ip_address": log.ip_address,
+                        "user_agent": log.user_agent,
+                        "success": log.success,
+                    },
+                    "diff": {},
+                    "created_at": log.created_at.isoformat(),
+                })
+
+        items = sorted(items, key=lambda x: x["created_at"], reverse=True)[:500]
+
+        return Response({"logs": items})
+
+
+class AdminAuditExportView(APIView):
+    """
+    GET /api/admin/audit/export
+    監査ログCSV出力
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        denied = _require_any_group(request, [GROUP_ADMIN_READ, "admin_audit"])
+        if denied:
+            return denied
+
+        data = AdminAuditSearchView().get(request).data.get("logs", [])
+        if not data:
+            return Response({"success": False, "message": "No data to export"}, status=status.HTTP_404_NOT_FOUND)
+
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = f'attachment; filename="audit_{timezone.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+        writer = csv.writer(response)
+        writer.writerow(["type", "action", "actor", "user_id", "ticket_id", "message", "created_at"])
+        for row in data:
+            writer.writerow([
+                row.get("type"), row.get("action"), row.get("actor"),
+                row.get("user_id"), row.get("ticket_id"), row.get("message"),
+                row.get("created_at"),
+            ])
+
+        _log_admin_action(
+            request,
+            action="audit_export",
+            target_type="audit",
+            metadata={"count": len(data)},
+        )
+
+        return response
+
+
+class AdminSupportSearchView(APIView):
+    """
+    GET /api/admin/support/search
+    顧客サポート用検索
+    """
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        denied = _require_any_group(request, [GROUP_ADMIN_READ, "admin_support"])
+        if denied:
+            return denied
+
+        query = request.query_params.get('q', '').strip()
+        if len(query) < 2:
+            return Response({"success": True, "results": []})
+
+        user = None
+        reservation = None
+        ticket = None
+
+        if query.startswith("R-"):
+            reservation = Reservation.objects.filter(id=query).first()
+            user = reservation.user if reservation else None
+        else:
+            ticket = Ticket.objects.filter(id=query).select_related('reservation').first()
+            if ticket:
+                reservation = ticket.reservation
+                user = reservation.user if reservation else None
+            if not user:
+                user = User.objects.filter(models.Q(username__icontains=query) | models.Q(email__icontains=query)).first()
+
+        if not reservation and user:
+            reservation = Reservation.objects.filter(user=user).order_by('-created_at').first()
+
+        reservations = Reservation.objects.filter(user=user).prefetch_related('tickets').order_by('-created_at') if user else []
+        tickets = Ticket.objects.filter(reservation__user=user).select_related('slot', 'attribute', 'reservation') if user else []
+        checkins = CheckInLog.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50] if user else []
+        share_links = TicketShareLink.objects.filter(ticket__reservation__user=user).order_by('-created_at')[:50] if user else []
+        email_logs = EmailDeliveryLog.objects.filter(reservation__user=user).order_by('-created_at')[:50] if user else []
+
+        profile = None
+        if user:
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        return Response({
+            "success": True,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "is_active": user.is_active,
+            } if user else None,
+            "profile": {
+                "support_note": profile.support_note,
+                "verification_status": profile.verification_status,
+                "verification_note": profile.verification_note,
+                "verification_updated_at": profile.verification_updated_at.isoformat() if profile and profile.verification_updated_at else None,
+            } if profile else None,
+            "reservations": ReservationListSerializer(reservations, many=True).data if reservations else [],
+            "tickets": TicketSerializer(tickets, many=True).data if tickets else [],
+            "checkins": [
+                {
+                    "id": str(log.id),
+                    "ticket_id": str(log.ticket_id),
+                    "action": log.action,
+                    "success": log.success,
+                    "message": log.message,
+                    "created_at": log.created_at.isoformat(),
+                }
+                for log in checkins
+            ],
+            "share_links": [
+                {
+                    "id": str(link.id),
+                    "token": link.token,
+                    "ticket_id": str(link.ticket_id),
+                    "expires_at": link.expires_at.isoformat(),
+                    "revoked_at": link.revoked_at.isoformat() if link.revoked_at else None,
+                    "access_count": link.access_count,
+                    "max_accesses": link.max_accesses,
+                }
+                for link in share_links
+            ],
+            "email_logs": [
+                {
+                    "id": str(log.id),
+                    "to_email": log.to_email,
+                    "subject": log.subject,
+                    "mode": log.mode,
+                    "success": log.success,
+                    "created_at": log.created_at.isoformat(),
+                }
+                for log in email_logs
+            ],
+        })
+
+
+class AdminSupportActionView(APIView):
+    """
+    POST /api/admin/support/action
+    顧客サポート操作
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        denied = _require_any_group(request, ["admin_support", GROUP_ADMIN_OPS])
+        if denied:
+            return denied
+
+        action = request.data.get("action")
+        if action == "resend_confirmation":
+            reservation_id = request.data.get("reservation_id")
+            reservation = Reservation.objects.prefetch_related('tickets__slot', 'tickets__attribute').filter(id=reservation_id).first()
+            if not reservation or not reservation.user_email:
+                return Response({"success": False, "message": "予約が見つからないか、メールが未設定です"}, status=status.HTTP_404_NOT_FOUND)
+
+            from .email_service import email_service
+            ticket_rows = []
+            for t in reservation.tickets.all():
+                ticket_rows.append({
+                    'guest_name': t.guest_info.get('name', '未入力') if t.guest_info else '未入力',
+                    'slot_date': t.slot.event_date.isoformat() if t.slot else '',
+                    'slot_time': t.slot.start_time.strftime('%H:%M') if t.slot else '',
+                    'attribute_name': t.attribute.display_name if t.attribute else ''
+                })
+            user_name = reservation.user_name or reservation.guest_identifier or "お客様"
+            result = email_service.send_reservation_confirmation(
+                reservation.user_email,
+                reservation.id,
+                user_name,
+                ticket_rows,
+                context={"reservation": reservation, "created_by": request.user}
+            )
+
+            _log_admin_action(
+                request,
+                action="support_resend_confirmation",
+                target_type="reservation",
+                target_id=str(reservation.id),
+            )
+
+            return Response({"success": True, "result": result})
+
+        if action == "revoke_share":
+            token = request.data.get("token")
+            share = TicketShareLink.objects.filter(token=token, revoked_at__isnull=True).first()
+            if not share:
+                return Response({"success": False, "message": "共有リンクが見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+            share.revoked_at = timezone.now()
+            share.save(update_fields=["revoked_at"])
+            _log_admin_action(
+                request,
+                action="support_share_revoke",
+                target_type="ticket",
+                target_id=str(share.ticket_id),
+            )
+            return Response({"success": True})
+
+        if action == "update_note":
+            user_id = request.data.get("user_id")
+            note = request.data.get("note", "")
+            user = User.objects.filter(id=user_id).first()
+            if not user:
+                return Response({"success": False, "message": "ユーザーが見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.support_note = note
+            profile.save(update_fields=["support_note", "updated_at"])
+            _log_admin_action(
+                request,
+                action="support_note_update",
+                target_type="user",
+                target_id=str(user.id),
+            )
+            return Response({"success": True})
+
+        if action == "update_verification":
+            user_id = request.data.get("user_id")
+            status_value = request.data.get("status")
+            note = request.data.get("note", "")
+            user = User.objects.filter(id=user_id).first()
+            if not user:
+                return Response({"success": False, "message": "ユーザーが見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            if status_value and status_value not in UserProfile.VerificationStatus.values:
+                return Response({"success": False, "message": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
+            profile.verification_status = status_value or profile.verification_status
+            profile.verification_note = note
+            profile.verification_updated_at = timezone.now()
+            profile.verification_updated_by = request.user
+            profile.save(update_fields=["verification_status", "verification_note", "verification_updated_at", "verification_updated_by", "updated_at"])
+            _log_admin_action(
+                request,
+                action="support_verification_update",
+                target_type="user",
+                target_id=str(user.id),
+                metadata={"status": profile.verification_status},
+            )
+            return Response({"success": True})
+
+        return Response({"success": False, "message": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminBulkOperationView(APIView):
+    """
+    POST /api/admin/bulk
+    一括オペレーション
+    """
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        denied = _require_any_group(request, ["admin_bulk", GROUP_ADMIN_OPS])
+        if denied:
+            return denied
+
+        action = request.data.get("action")
+        if action == "close_entry":
+            slot_id = request.data.get("slot_id")
+            slot = EntrySlot.objects.filter(id=slot_id).first()
+            if not slot:
+                return Response({"success": False, "message": "入場枠が見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+            slot.entry_closed = True
+            slot.save(update_fields=["entry_closed"])
+            _log_admin_action(request, action="bulk_close_entry", target_type="slot", target_id=str(slot.id))
+            return Response({"success": True})
+
+        if action == "open_entry":
+            slot_id = request.data.get("slot_id")
+            slot = EntrySlot.objects.filter(id=slot_id).first()
+            if not slot:
+                return Response({"success": False, "message": "入場枠が見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+            slot.entry_closed = False
+            slot.save(update_fields=["entry_closed"])
+            _log_admin_action(request, action="bulk_open_entry", target_type="slot", target_id=str(slot.id))
+            return Response({"success": True})
+
+        if action == "checkin_revert":
+            slot_id = request.data.get("slot_id")
+            with transaction.atomic():
+                tickets = Ticket.objects.select_for_update().filter(slot_id=slot_id, status=Ticket.Status.ENTERED)
+                count = tickets.count()
+                tickets.update(status=Ticket.Status.VALID, entered_at=None)
+            _log_admin_action(request, action="bulk_checkin_revert", target_type="slot", target_id=str(slot_id), metadata={"count": count})
+            return Response({"success": True, "count": count})
+
+        if action == "move_slot":
+            from_slot_id = request.data.get("from_slot_id")
+            to_slot_id = request.data.get("to_slot_id")
+            if not from_slot_id or not to_slot_id:
+                return Response({"success": False, "message": "slot_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            with transaction.atomic():
+                to_slot = EntrySlot.objects.select_for_update().get(id=to_slot_id)
+                tickets = Ticket.objects.select_for_update().filter(slot_id=from_slot_id)
+                count = tickets.count()
+                if to_slot.remaining < count:
+                    return Response({"success": False, "message": "移動先の残枠が不足しています"}, status=status.HTTP_409_CONFLICT)
+                tickets.update(slot_id=to_slot_id)
+                to_slot.booked_count += count
+                to_slot.save(update_fields=["booked_count"])
+                EntrySlot.objects.filter(id=from_slot_id).update(booked_count=models.F('booked_count') - count)
+            _log_admin_action(request, action="bulk_move_slot", target_type="slot", target_id=str(to_slot_id), metadata={"count": count, "from": from_slot_id})
+            return Response({"success": True, "count": count})
+
+        if action == "reminder_email":
+            slot_id = request.data.get("slot_id")
+            if not slot_id:
+                return Response({"success": False, "message": "slot_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            reservations = Reservation.objects.filter(tickets__slot_id=slot_id).distinct()
+            from .email_service import email_service
+            sent = 0
+            for reservation in reservations:
+                if not reservation.user_email:
+                    continue
+                result = email_service.send_reservation_confirmation(
+                    reservation.user_email,
+                    reservation.id,
+                    reservation.user_name or reservation.guest_identifier or "お客様",
+                    [],
+                    context={"reservation": reservation, "created_by": request.user}
+                )
+                sent += 1
+            _log_admin_action(request, action="bulk_reminder_email", target_type="slot", target_id=str(slot_id), metadata={"count": sent})
+            return Response({"success": True, "count": sent})
+
+        return Response({"success": False, "message": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class DataCleanupView(APIView):
@@ -1566,33 +2183,28 @@ class DataCleanupView(APIView):
     
     def get(self, request):
         """クリーンアップ対象のデータ量を取得"""
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         thirty_days_ago = timezone.now() - timedelta(days=30)
         ninety_days_ago = timezone.now() - timedelta(days=90)
         
         return Response({
             'preview': {
                 'old_chat_messages': ChatMessage.objects.filter(created_at__lt=thirty_days_ago).count(),
-                'expired_transfers': TicketTransfer.objects.filter(
-                    status='pending',
-                    expires_at__lt=timezone.now()
-                ).count(),
                 'old_checkin_logs': CheckInLog.objects.filter(created_at__lt=ninety_days_ago).count(),
             }
         })
     
     def post(self, request):
         """クリーンアップを実行"""
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         action = request.data.get('action')
         results = {}
         
-        if action == 'expired_transfers':
-            count, _ = TicketTransfer.objects.filter(
-                status='pending',
-                expires_at__lt=timezone.now()
-            ).delete()
-            results['deleted_transfers'] = count
-        
-        elif action == 'old_chat':
+        if action == 'old_chat':
             thirty_days_ago = timezone.now() - timedelta(days=30)
             count, _ = ChatMessage.objects.filter(created_at__lt=thirty_days_ago).delete()
             results['deleted_messages'] = count
@@ -1605,10 +2217,20 @@ class DataCleanupView(APIView):
         else:
             return Response({'success': False, 'message': 'Invalid action'}, status=status.HTTP_400_BAD_REQUEST)
         
-        return Response({
+        response = Response({
             'success': True,
             'results': results
         })
+        _log_admin_action(
+            request,
+            action="cleanup_execute",
+            target_type="cleanup",
+            metadata={
+                "action": action,
+                "results": results,
+            },
+        )
+        return response
 
 
 class CacheManagementView(APIView):
@@ -1622,9 +2244,13 @@ class CacheManagementView(APIView):
         action = request.data.get('action')
         
         if action == 'clear':
+            denied = _require_group(request, GROUP_ADMIN_OPS)
+            if denied:
+                return denied
             try:
                 from django.core.cache import cache
                 cache.clear()
+                _log_admin_action(request, action="cache_clear", target_type="cache")
                 return Response({
                     'success': True,
                     'message': 'キャッシュをクリアしました'
@@ -1646,6 +2272,9 @@ class UserManagementView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         users = User.objects.all().order_by('-date_joined')[:100]
         return Response({
             'users': [
@@ -1668,14 +2297,33 @@ class UserManagementView(APIView):
     
     def patch(self, request):
         """ユーザー情報を更新"""
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         user_id = request.data.get('user_id')
         if not user_id:
             return Response({'success': False, 'message': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if ('is_staff' in request.data or 'is_superuser' in request.data) and not request.user.is_superuser:
+            return Response({'success': False, 'message': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        if request.data.get('reset_password') and not request.user.is_superuser:
+            return Response({'success': False, 'message': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
         
         try:
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
             return Response({'success': False, 'message': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        before = {
+            'username': user.username,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'is_staff': user.is_staff,
+            'is_superuser': user.is_superuser,
+            'is_active': user.is_active,
+        }
         
         # 更新可能なフィールド
         if 'username' in request.data:
@@ -1719,6 +2367,23 @@ class UserManagementView(APIView):
                 return Response({'success': False, 'message': 'パスワードは6文字以上で入力してください'}, status=status.HTTP_400_BAD_REQUEST)
         
         user.save()
+
+        changes = {}
+        for key, old_value in before.items():
+            new_value = getattr(user, key)
+            if old_value != new_value:
+                changes[key] = {'from': old_value, 'to': new_value}
+
+        _log_admin_action(
+            request,
+            action="user_update",
+            target_type="user",
+            target_id=user.id,
+            metadata={
+                'changes': changes,
+                'reset_password': bool(request.data.get('reset_password')),
+            }
+        )
         
         return Response({
             'success': True,
@@ -1737,6 +2402,9 @@ class UserManagementView(APIView):
     
     def delete(self, request):
         """ユーザーを削除"""
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         user_id = request.data.get('user_id')
         if not user_id:
             return Response({'success': False, 'message': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1756,6 +2424,16 @@ class UserManagementView(APIView):
         
         username = user.username
         user.delete()
+
+        _log_admin_action(
+            request,
+            action="user_delete",
+            target_type="user",
+            target_id=user_id,
+            metadata={
+                'username': username,
+            }
+        )
         
         return Response({
             'success': True,
@@ -1771,6 +2449,9 @@ class DataExportView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         export_type = request.query_params.get('type', 'tickets')
         format_type = request.query_params.get('format', 'json')
         
@@ -1829,9 +2510,31 @@ class DataExportView(APIView):
             writer.writeheader()
             for row in data:
                 writer.writerow(row)
+
+            _log_admin_action(
+                request,
+                action="data_export",
+                target_type="export",
+                metadata={
+                    "type": export_type,
+                    "format": format_type,
+                    "count": len(data),
+                },
+            )
             
             return response
-        
+
+        _log_admin_action(
+            request,
+            action="data_export",
+            target_type="export",
+            metadata={
+                "type": export_type,
+                "format": format_type,
+                "count": len(data),
+            },
+        )
+
         return Response({
             'type': export_type,
             'count': len(data),
@@ -1854,17 +2557,31 @@ class EmergencyStopView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         setting = SystemSetting.get_instance()
         return Response({
             "emergency_stop": setting.emergency_stop,
             "emergency_message": setting.emergency_message,
             "maintenance_mode": setting.maintenance_mode,
+            "operation_mode": setting.operation_mode,
             "updated_at": setting.updated_at.isoformat() if setting.updated_at else None,
             "updated_by": setting.updated_by.username if setting.updated_by else None,
         })
     
     def post(self, request):
+        denied = _require_group(request, GROUP_ADMIN_EMERGENCY)
+        if denied:
+            return denied
         setting = SystemSetting.get_instance()
+        before = {
+            "emergency_stop": setting.emergency_stop,
+            "emergency_message": setting.emergency_message,
+            "maintenance_mode": setting.maintenance_mode,
+            "operation_mode": setting.operation_mode,
+                "operation_mode": setting.operation_mode,
+        }
         
         if 'emergency_stop' in request.data:
             setting.emergency_stop = request.data['emergency_stop']
@@ -1874,9 +2591,29 @@ class EmergencyStopView(APIView):
         
         if 'maintenance_mode' in request.data:
             setting.maintenance_mode = request.data['maintenance_mode']
+
+        if 'operation_mode' in request.data:
+            setting.operation_mode = request.data['operation_mode']
         
         setting.updated_by = request.user
         setting.save()
+
+        _create_system_setting_history(setting, request, "emergency_update")
+
+        _log_admin_action(
+            request,
+            action="emergency_update",
+            target_type="system_setting",
+            target_id=getattr(setting, "id", ""),
+            metadata={
+                "before": before,
+                "after": {
+                    "emergency_stop": setting.emergency_stop,
+                    "emergency_message": setting.emergency_message,
+                    "maintenance_mode": setting.maintenance_mode,
+                },
+            },
+        )
         
         return Response({
             "success": True,
@@ -1884,6 +2621,7 @@ class EmergencyStopView(APIView):
             "emergency_stop": setting.emergency_stop,
             "emergency_message": setting.emergency_message,
             "maintenance_mode": setting.maintenance_mode,
+            "operation_mode": setting.operation_mode,
         })
 
 
@@ -1898,6 +2636,9 @@ class DeviceStatisticsView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         from django.db.models.functions import TruncHour
         from datetime import date as date_type
         
@@ -1961,6 +2702,7 @@ class EmergencyStopCheckView(APIView):
             "emergency_stop": setting.emergency_stop,
             "emergency_message": setting.emergency_message,
             "maintenance_mode": setting.maintenance_mode,
+            "operation_mode": setting.operation_mode,
         })
 
 
@@ -1975,6 +2717,9 @@ class EmailSettingsView(APIView):
     permission_classes = [IsAdminUser]
     
     def get(self, request):
+        denied = _require_group(request, GROUP_ADMIN_READ)
+        if denied:
+            return denied
         setting = SystemSetting.get_instance()
         return Response({
             "email_mode": setting.email_mode,
@@ -1982,12 +2727,22 @@ class EmailSettingsView(APIView):
             "sendgrid_api_key_masked": self._mask_api_key(setting.sendgrid_api_key),
             "email_from_address": setting.email_from_address,
             "email_from_name": setting.email_from_name,
+            "operation_mode": setting.operation_mode,
             "updated_at": setting.updated_at.isoformat() if setting.updated_at else None,
             "updated_by": setting.updated_by.username if setting.updated_by else None,
         })
     
     def post(self, request):
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         setting = SystemSetting.get_instance()
+        before = {
+            "email_mode": setting.email_mode,
+            "email_from_address": setting.email_from_address,
+            "email_from_name": setting.email_from_name,
+            "sendgrid_api_key_set": bool(setting.sendgrid_api_key),
+        }
         
         if 'email_mode' in request.data:
             setting.email_mode = request.data['email_mode']
@@ -2004,6 +2759,25 @@ class EmailSettingsView(APIView):
         
         setting.updated_by = request.user
         setting.save()
+
+        _create_system_setting_history(setting, request, "email_settings_update")
+
+        _log_admin_action(
+            request,
+            action="email_settings_update",
+            target_type="system_setting",
+            target_id=getattr(setting, "id", ""),
+            metadata={
+                "before": before,
+                "after": {
+                    "email_mode": setting.email_mode,
+                    "email_from_address": setting.email_from_address,
+                    "email_from_name": setting.email_from_name,
+                    "sendgrid_api_key_set": bool(setting.sendgrid_api_key),
+                },
+                "sendgrid_api_key_changed": "sendgrid_api_key" in request.data,
+            },
+        )
         
         return Response({
             "success": True,
@@ -2027,8 +2801,12 @@ class EmailTestView(APIView):
     テストメール送信
     """
     permission_classes = [IsAdminUser]
+    throttle_classes = [EmailOpsThrottle]
     
     def post(self, request):
+        denied = _require_group(request, GROUP_ADMIN_OPS)
+        if denied:
+            return denied
         to_email = request.data.get('to_email', request.user.email)
         
         if not to_email:
@@ -2059,5 +2837,84 @@ class EmailTestView(APIView):
         """
         
         result = email_service.send_email([to_email], subject, html_content)
-        
+
+        _log_admin_action(
+            request,
+            action="email_test",
+            target_type="email",
+            metadata={
+                "to_email": to_email,
+                "success": bool(result.get("success")) if isinstance(result, dict) else None,
+                "email_mode": SystemSetting.get_instance().email_mode,
+            },
+        )
+
         return Response(result)
+
+
+class SystemSettingHistoryView(APIView):
+    """
+    GET /api/admin/system/settings/history
+    システム設定の変更履歴を取得
+    """
+    permission_classes = [IsAdminUser]
+    throttle_classes = [EmailOpsThrottle]
+
+    def get(self, request):
+        denied = _require_any_group(request, [GROUP_ADMIN_READ, "admin_audit", GROUP_ADMIN_OPS])
+        if denied:
+            return denied
+        histories = SystemSettingHistory.objects.select_related('created_by').order_by('-created_at')[:200]
+        data = []
+        for item in histories:
+            data.append({
+                "id": str(item.id),
+                "action": item.action,
+                "created_by": item.created_by.username if item.created_by else None,
+                "created_at": item.created_at.isoformat(),
+                "snapshot": _mask_setting_snapshot(item.snapshot or {}),
+            })
+        return Response({"histories": data})
+
+
+class SystemSettingRollbackView(APIView):
+    """
+    POST /api/admin/system/settings/rollback
+    変更履歴から設定をロールバック
+    """
+    permission_classes = [IsAdminUser]
+    throttle_classes = [EmailOpsThrottle]
+
+    @transaction.atomic
+    def post(self, request):
+        denied = _require_any_group(request, [GROUP_ADMIN_EMERGENCY, GROUP_ADMIN_OPS])
+        if denied:
+            return denied
+        history_id = request.data.get("history_id")
+        history = SystemSettingHistory.objects.select_related('system_setting').filter(id=history_id).first()
+        if not history:
+            return Response({"success": False, "message": "履歴が見つかりません"}, status=status.HTTP_404_NOT_FOUND)
+
+        setting = SystemSetting.objects.select_for_update().get(id=history.system_setting_id)
+        snapshot = history.snapshot or {}
+        setting.emergency_stop = snapshot.get("emergency_stop", setting.emergency_stop)
+        setting.emergency_message = snapshot.get("emergency_message", setting.emergency_message)
+        setting.maintenance_mode = snapshot.get("maintenance_mode", setting.maintenance_mode)
+        setting.operation_mode = snapshot.get("operation_mode", setting.operation_mode)
+        setting.email_mode = snapshot.get("email_mode", setting.email_mode)
+        setting.sendgrid_api_key = snapshot.get("sendgrid_api_key", setting.sendgrid_api_key)
+        setting.email_from_address = snapshot.get("email_from_address", setting.email_from_address)
+        setting.email_from_name = snapshot.get("email_from_name", setting.email_from_name)
+        setting.updated_by = request.user
+        setting.save()
+
+        _create_system_setting_history(setting, request, "settings_rollback")
+        _log_admin_action(
+            request,
+            action="settings_rollback",
+            target_type="system_setting",
+            target_id=str(setting.id),
+            metadata={"history_id": str(history.id)},
+        )
+
+        return Response({"success": True})

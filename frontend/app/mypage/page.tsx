@@ -16,11 +16,11 @@ import {
   X,
   Check,
   AlertTriangle,
-  Share2,
-  Copy,
-  CheckCircle,
+  Printer,
+  Eye,
   Sun,
   Moon,
+  Link as LinkIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,10 +39,12 @@ import { DynamicForm } from "@/components/DynamicForm";
 import { MaintenanceCheck } from "@/components/MaintenanceCheck";
 import { useAuthStore } from "@/store/useAuthStore";
 import { useThemeStore } from "@/store/useThemeStore";
-import { getMyTickets, cancelTicket, updateTicketInfo, createTicketTransfer, getAttributes, getMyTransfers, cancelTicketTransfer, type TicketTransfer } from "@/lib/api";
+import { getMyTickets, cancelTicket, updateTicketInfo, getAttributes, createShareLink } from "@/lib/api";
 import { getApiErrorMessage } from "@/lib/utils";
 import type { AttributeConfig } from "@/lib/types";
 import type { Ticket } from "@/lib/types";
+
+const TICKETS_CACHE_KEY = "matsu_tickets_cache";
 
 export default function MyPage() {
   const router = useRouter();
@@ -53,6 +55,8 @@ export default function MyPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [previewTicket, setPreviewTicket] = useState<Ticket | null>(null);
 
   // Login/Register form
   const [formData, setFormData] = useState({
@@ -68,16 +72,16 @@ export default function MyPage() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [editFormData, setEditFormData] = useState<Record<string, any>>({});
   const [editAttributeId, setEditAttributeId] = useState<string>("");
   const [allAttributes, setAllAttributes] = useState<AttributeConfig[]>([]);
   const [actionLoading, setActionLoading] = useState(false);
-  const [transferLink, setTransferLink] = useState<string | null>(null);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [pendingTransfers, setPendingTransfers] = useState<TicketTransfer[]>([]);
-  const [cancelTransferDialogOpen, setCancelTransferDialogOpen] = useState(false);
-  const [selectedTransfer, setSelectedTransfer] = useState<TicketTransfer | null>(null);
+  const [walletLoadingId, setWalletLoadingId] = useState<string | null>(null);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareTicket, setShareTicket] = useState<Ticket | null>(null);
+  const [shareLink, setShareLink] = useState<string | null>(null);
+  const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
 
   // Check auth on mount
   useEffect(() => {
@@ -95,33 +99,71 @@ export default function MyPage() {
     try {
       const data = await getMyTickets();
       setTickets(data);
+      setOfflineMode(false);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(TICKETS_CACHE_KEY, JSON.stringify(data));
+      }
     } catch (err) {
-      setError("チケットの取得に失敗しました");
-      setTickets([]);
+      if (typeof window !== "undefined") {
+        const cached = localStorage.getItem(TICKETS_CACHE_KEY);
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached) as Ticket[];
+            setTickets(parsed);
+            setOfflineMode(true);
+            setError("オフライン表示中です。最新情報はネット接続後に更新されます。");
+          } catch {
+            setError("チケットの取得に失敗しました");
+            setTickets([]);
+          }
+        } else {
+          setError("チケットの取得に失敗しました");
+          setTickets([]);
+        }
+      } else {
+        setError("チケットの取得に失敗しました");
+        setTickets([]);
+      }
     } finally {
       setLoading(false);
     }
   }, [isAuthenticated]);
 
-  // Fetch pending transfers
-  const fetchPendingTransfers = useCallback(async () => {
-    if (!isAuthenticated) return;
-    
+  const handleAddToWallet = async (ticket: Ticket) => {
+    setError(null);
+    setWalletLoadingId(ticket.id);
     try {
-      const transfers = await getMyTransfers();
-      // 保留中の譲渡のみフィルタ
-      setPendingTransfers(transfers.filter(t => t.status === 'pending'));
+      const token = localStorage.getItem("access_token");
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+      const res = await fetch(`${apiUrl}/api/mypage/wallet-pass/${ticket.id}/`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.message || "Apple Walletの追加に失敗しました");
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ticket-${ticket.id}.pkpass`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
-      // エラーは無視
+      setError("Apple Walletの追加に失敗しました");
+    } finally {
+      setWalletLoadingId(null);
     }
-  }, [isAuthenticated]);
+  };
 
   useEffect(() => {
     if (isAuthenticated) {
       fetchTickets();
-      fetchPendingTransfers();
     }
-  }, [isAuthenticated, fetchTickets, fetchPendingTransfers]);
+  }, [isAuthenticated, fetchTickets]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -154,25 +196,9 @@ export default function MyPage() {
     setTickets([]);
   };
 
-  const handleCancelTicket = async () => {
-    if (!selectedTicket) return;
-    
-    setActionLoading(true);
-    try {
-      await cancelTicket(selectedTicket.id);
-      await fetchTickets();
-      setCancelDialogOpen(false);
-      setSelectedTicket(null);
-    } catch (err) {
-      setError(getApiErrorMessage(err, "キャンセルに失敗しました"));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   const handleUpdateTicket = async () => {
     if (!selectedTicket) return;
-    
+
     setActionLoading(true);
     setError(null);
     try {
@@ -182,12 +208,29 @@ export default function MyPage() {
         setActionLoading(false);
         return;
       }
-      await updateTicketInfo(selectedTicket.id, editFormData, editAttributeId !== selectedTicket.attribute ? editAttributeId : undefined);
+      const nextAttributeId = editAttributeId !== selectedTicket.attribute ? editAttributeId : undefined;
+      await updateTicketInfo(selectedTicket.id, editFormData, nextAttributeId);
       await fetchTickets();
       setEditDialogOpen(false);
       setSelectedTicket(null);
     } catch (err) {
       setError(getApiErrorMessage(err, "更新に失敗しました"));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCancelTicket = async () => {
+    if (!selectedTicket) return;
+
+    setActionLoading(true);
+    try {
+      await cancelTicket(selectedTicket.id);
+      await fetchTickets();
+      setCancelDialogOpen(false);
+      setSelectedTicket(null);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "キャンセルに失敗しました"));
     } finally {
       setActionLoading(false);
     }
@@ -212,67 +255,42 @@ export default function MyPage() {
     setCancelDialogOpen(true);
   };
 
-  const openTransferDialog = async (ticket: Ticket) => {
-    setSelectedTicket(ticket);
-    setTransferLink(null);
-    setLinkCopied(false);
-    setTransferDialogOpen(true);
-  };
-
-  const handleCreateTransfer = async () => {
-    if (!selectedTicket) return;
-    
-    setActionLoading(true);
-    try {
-      const result = await createTicketTransfer(selectedTicket.id);
-      const fullUrl = `${window.location.origin}${result.transfer_url}`;
-      setTransferLink(fullUrl);
-    } catch (err) {
-      setError(getApiErrorMessage(err, "譲渡リンクの作成に失敗しました"));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleCopyLink = async () => {
-    if (!transferLink) return;
-    try {
-      await navigator.clipboard.writeText(transferLink);
-      setLinkCopied(true);
-      setTimeout(() => setLinkCopied(false), 2000);
-    } catch {
-      setError("コピーに失敗しました");
-    }
-  };
-
-  // 譲渡をキャンセル
-  const handleCancelTransfer = async () => {
-    if (!selectedTransfer) return;
-    
-    setActionLoading(true);
-    try {
-      await cancelTicketTransfer(selectedTransfer.id);
-      await fetchPendingTransfers();
-      await fetchTickets();
-      setCancelTransferDialogOpen(false);
-      setSelectedTransfer(null);
-    } catch (err) {
-      setError(getApiErrorMessage(err, "譲渡のキャンセルに失敗しました"));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const openCancelTransferDialog = (transfer: TicketTransfer) => {
-    setSelectedTransfer(transfer);
-    setError(null);
-    setCancelTransferDialogOpen(true);
-  };
-
   // Group tickets by status
   const validTickets = tickets.filter((t) => t.status === "valid");
   const enteredTickets = tickets.filter((t) => t.status === "entered");
   const cancelledTickets = tickets.filter((t) => t.status === "cancelled");
+
+  const openShareDialog = (ticket: Ticket) => {
+    setShareTicket(ticket);
+    setShareLink(null);
+    setShareExpiresAt(null);
+    setShareDialogOpen(true);
+  };
+
+  const handleCreateShareLink = async () => {
+    if (!shareTicket) return;
+    setShareLoading(true);
+    setError(null);
+    try {
+      const result = await createShareLink(shareTicket.id, 24);
+      const origin = window.location.origin;
+      setShareLink(`${origin}/share/${result.token}`);
+      setShareExpiresAt(result.expires_at);
+    } catch (err) {
+      setError(getApiErrorMessage(err, "共有リンクの作成に失敗しました"));
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleCopyShareLink = async () => {
+    if (!shareLink) return;
+    try {
+      await navigator.clipboard.writeText(shareLink);
+    } catch {
+      // ignore
+    }
+  };
 
   if (authLoading) {
     return (
@@ -286,7 +304,7 @@ export default function MyPage() {
     <MaintenanceCheck>
     <div className="min-h-screen pb-8">
       {/* Header */}
-      <header className="sticky top-0 z-40 glass border-b">
+      <header className="sticky top-0 z-40 glass border-b no-print">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -446,7 +464,7 @@ export default function MyPage() {
           /* Authenticated Content */
           <>
             {/* User Info */}
-            <Card className="glass">
+            <Card className="glass no-print">
               <CardContent className="pt-6">
                 <div className="flex items-center gap-4">
                   <div className="h-12 w-12 rounded-full bg-primary/20 flex items-center justify-center">
@@ -459,6 +477,12 @@ export default function MyPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {error && (
+              <div className="no-print p-4 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 dark:text-amber-200">
+                {error}
+              </div>
+            )}
 
             {/* Tickets */}
             <AnimatePresence mode="wait">
@@ -494,149 +518,148 @@ export default function MyPage() {
                   exit={{ opacity: 0 }}
                   className="space-y-8"
                 >
-                  {/* Pending Transfers */}
-                  {pendingTransfers.length > 0 && (
-                    <section className="space-y-4">
-                      <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-yellow-500" />
-                        譲渡中 ({pendingTransfers.length})
-                      </h2>
-                      <div className="grid gap-4">
-                        {pendingTransfers.map((transfer) => (
-                          <Card key={transfer.id} className="glass border-yellow-500/30">
-                            <CardContent className="pt-4 space-y-3">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  {transfer.ticket_detail ? (
-                                    <>
-                                      <p className="font-medium">
-                                        {transfer.ticket_detail.slot_detail.event_date} {transfer.ticket_detail.slot_detail.start_time}
-                                      </p>
-                                      <p className="text-sm text-muted-foreground">
-                                        {transfer.ticket_detail.attribute_detail.display_name}
-                                      </p>
-                                    </>
+                  {/* Actions */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 no-print">
+                    <div className="text-sm text-slate-600 dark:text-slate-300">
+                      {offlineMode ? "オフライン表示中です。最新情報はネット接続後に更新されます。" : "QR一覧を印刷して当日に提示できます。"}
+                    </div>
+                    <Button variant="outline" onClick={() => window.print()}>
+                      <Printer className="h-4 w-4 mr-2" />
+                      QR一覧を印刷
+                    </Button>
+                  </div>
+
+                  <div className="print-area space-y-8">
+                    {/* Valid Tickets */}
+                    {validTickets.length > 0 && (
+                      <section className="space-y-4">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full bg-green-500" />
+                          入場可能 ({validTickets.length})
+                        </h2>
+                        <div className="grid gap-4">
+                          {validTickets.map((ticket) => (
+                            <div key={ticket.id} className="space-y-2">
+                              <TicketCard ticket={ticket} />
+                              <div className="flex gap-2 px-2 no-print">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setPreviewTicket(ticket)}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  表示
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openShareDialog(ticket)}
+                                >
+                                  <LinkIcon className="h-4 w-4 mr-1" />
+                                  共有
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleAddToWallet(ticket)}
+                                  disabled={walletLoadingId === ticket.id}
+                                >
+                                  {walletLoadingId === ticket.id ? (
+                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                                   ) : (
-                                    <p className="text-sm text-muted-foreground">チケットID: {transfer.ticket}</p>
+                                    <Wallet className="h-4 w-4 mr-1" />
                                   )}
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    有効期限: {new Date(transfer.expires_at).toLocaleString("ja-JP")}
-                                  </p>
-                                </div>
-                                <span className="px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-600 dark:text-yellow-400">
-                                  {transfer.status_display}
-                                </span>
+                                  Walletに追加
+                                </Button>
+                                {ticket.attribute_detail.is_modifiable && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openEditDialog(ticket)}
+                                  >
+                                    <Edit className="h-4 w-4 mr-1" />
+                                    情報を編集
+                                  </Button>
+                                )}
+                                {ticket.attribute_detail.is_cancellable && (
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => openCancelDialog(ticket)}
+                                  >
+                                    <X className="h-4 w-4 mr-1" />
+                                    キャンセル
+                                  </Button>
+                                )}
                               </div>
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={async () => {
-                                    const fullUrl = `${window.location.origin}/transfer/${transfer.transfer_token}`;
-                                    try {
-                                      await navigator.clipboard.writeText(fullUrl);
-                                      setLinkCopied(true);
-                                      setTimeout(() => setLinkCopied(false), 2000);
-                                    } catch {
-                                      setError("コピーに失敗しました");
-                                    }
-                                  }}
-                                >
-                                  <Copy className="h-4 w-4 mr-1" />
-                                  {linkCopied ? "コピー済み" : "リンクをコピー"}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => openCancelTransferDialog(transfer)}
-                                >
-                                  <X className="h-4 w-4 mr-1" />
-                                  キャンセル
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* Valid Tickets */}
-                  {validTickets.length > 0 && (
-                    <section className="space-y-4">
-                      <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-green-500" />
-                        入場可能 ({validTickets.length})
-                      </h2>
-                      <div className="grid gap-4">
-                        {validTickets.map((ticket) => (
-                          <div key={ticket.id} className="space-y-2">
-                            <TicketCard ticket={ticket} />
-                            <div className="flex gap-2 px-2">
-                              {ticket.attribute_detail.is_modifiable && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => openEditDialog(ticket)}
-                                >
-                                  <Edit className="h-4 w-4 mr-1" />
-                                  情報を編集
-                                </Button>
-                              )}
-                              {ticket.attribute_detail.is_cancellable && (
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => openCancelDialog(ticket)}
-                                >
-                                  <X className="h-4 w-4 mr-1" />
-                                  キャンセル
-                                </Button>
-                              )}
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => openTransferDialog(ticket)}
-                              >
-                                <Share2 className="h-4 w-4 mr-1" />
-                                譲渡
-                              </Button>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  )}
+                          ))}
+                        </div>
+                      </section>
+                    )}
 
-                  {/* Entered Tickets */}
-                  {enteredTickets.length > 0 && (
-                    <section className="space-y-4">
-                      <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-blue-500" />
-                        入場済み ({enteredTickets.length})
-                      </h2>
-                      <div className="grid gap-4">
-                        {enteredTickets.map((ticket) => (
-                          <TicketCard key={ticket.id} ticket={ticket} compact />
-                        ))}
-                      </div>
-                    </section>
-                  )}
+                    {/* Entered Tickets */}
+                    {enteredTickets.length > 0 && (
+                      <section className="space-y-4">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full bg-blue-500" />
+                          入場済み ({enteredTickets.length})
+                        </h2>
+                        <div className="grid gap-4">
+                          {enteredTickets.map((ticket) => (
+                            <div key={ticket.id} className="space-y-2">
+                              <TicketCard ticket={ticket} compact />
+                              <div className="flex gap-2 px-2 no-print">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setPreviewTicket(ticket)}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  表示
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openShareDialog(ticket)}
+                                >
+                                  <LinkIcon className="h-4 w-4 mr-1" />
+                                  共有
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
 
-                  {/* Cancelled Tickets */}
-                  {cancelledTickets.length > 0 && (
-                    <section className="space-y-4 opacity-60">
-                      <h2 className="text-lg font-semibold flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-red-500" />
-                        キャンセル済み ({cancelledTickets.length})
-                      </h2>
-                      <div className="grid gap-4">
-                        {cancelledTickets.map((ticket) => (
-                          <TicketCard key={ticket.id} ticket={ticket} compact />
-                        ))}
-                      </div>
-                    </section>
-                  )}
+                    {/* Cancelled Tickets */}
+                    {cancelledTickets.length > 0 && (
+                      <section className="space-y-4 opacity-60">
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full bg-red-500" />
+                          キャンセル済み ({cancelledTickets.length})
+                        </h2>
+                        <div className="grid gap-4">
+                          {cancelledTickets.map((ticket) => (
+                            <div key={ticket.id} className="space-y-2">
+                              <TicketCard ticket={ticket} compact />
+                              <div className="flex gap-2 px-2 no-print">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setPreviewTicket(ticket)}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  表示
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    )}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -757,110 +780,83 @@ export default function MyPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Transfer Dialog */}
-      <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
-        <DialogContent>
+      {/* Preview Dialog */}
+      <Dialog open={!!previewTicket} onOpenChange={(open) => !open && setPreviewTicket(null)}>
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Share2 className="h-5 w-5 text-primary" />
-              チケットを譲渡
+              <Eye className="h-5 w-5 text-primary" />
+              チケットを表示
             </DialogTitle>
             <DialogDescription>
-              チケットを他の人に譲渡できます。譲渡リンクを作成して共有してください。
-              {selectedTicket && (
-                <div className="mt-4 p-4 bg-muted rounded-lg">
-                  <p className="font-medium">
-                    {selectedTicket.slot_detail.event_date} {selectedTicket.slot_detail.start_time}
-                  </p>
-                  <p className="text-sm">{selectedTicket.attribute_detail.display_name}</p>
-                </div>
-              )}
+              当日はこのQRコードを提示してください。
             </DialogDescription>
           </DialogHeader>
-          
-          {transferLink ? (
-            <div className="space-y-4">
-              <p className="text-sm text-green-500 flex items-center gap-2">
-                <CheckCircle className="h-4 w-4" />
-                譲渡リンクが作成されました（48時間有効）
-              </p>
-              <div className="flex gap-2">
-                <Input value={transferLink} readOnly className="text-xs" />
-                <Button size="icon" variant="outline" onClick={handleCopyLink}>
-                  {linkCopied ? (
-                    <Check className="h-4 w-4 text-green-500" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                このリンクをLINEやメールで送信してください。相手がリンクを開いてログインすると、チケットが譲渡されます。
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                譲渡リンクを作成すると、このチケットは相手が受け取るまで使用できなくなります。
-              </p>
-              {error && (
-                <p className="text-sm text-destructive">{error}</p>
-              )}
+          {previewTicket && (
+            <div className="py-4">
+              <TicketCard ticket={previewTicket} />
             </div>
           )}
-          
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTransferDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setPreviewTicket(null)}>
               閉じる
             </Button>
-            {!transferLink && (
-              <Button onClick={handleCreateTransfer} disabled={actionLoading}>
-                {actionLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <Share2 className="h-4 w-4 mr-2" />
-                )}
-                譲渡リンクを作成
-              </Button>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Cancel Transfer Dialog */}
-      <Dialog open={cancelTransferDialogOpen} onOpenChange={setCancelTransferDialogOpen}>
-        <DialogContent>
+      {/* Share Link Dialog */}
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
-              譲渡をキャンセル
+            <DialogTitle className="flex items-center gap-2">
+              <LinkIcon className="h-5 w-5 text-primary" />
+              共有リンクを作成
             </DialogTitle>
             <DialogDescription>
-              この譲渡をキャンセルしますか？キャンセルすると、チケットは再び使用可能になります。
-              {selectedTransfer?.ticket_detail && (
-                <div className="mt-4 p-4 bg-muted rounded-lg">
-                  <p className="font-medium">
-                    {selectedTransfer.ticket_detail.slot_detail.event_date} {selectedTransfer.ticket_detail.slot_detail.start_time}
-                  </p>
-                  <p className="text-sm">{selectedTransfer.ticket_detail.attribute_detail.display_name}</p>
-                </div>
-              )}
+              チケット単位で閲覧専用のリンクを発行します（譲渡ではありません）。
             </DialogDescription>
           </DialogHeader>
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
+
+          <div className="space-y-4">
+            {shareTicket && (
+              <div className="space-y-2">
+                <Label>対象チケット</Label>
+                <div className="rounded-md border border-input bg-background p-3 text-sm text-slate-700">
+                  <div className="font-mono text-xs text-slate-500">{shareTicket.id}</div>
+                  <div className="text-xs text-slate-500">
+                    {shareTicket.slot_detail?.event_date} {shareTicket.slot_detail?.start_time?.slice(0, 5)} / {shareTicket.attribute_detail?.display_name}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {shareLink ? (
+              <div className="space-y-2">
+                <Label>共有リンク</Label>
+                <div className="flex gap-2">
+                  <Input value={shareLink} readOnly />
+                  <Button variant="outline" onClick={handleCopyShareLink}>
+                    コピー
+                  </Button>
+                </div>
+                {shareExpiresAt && (
+                  <p className="text-xs text-muted-foreground">
+                    有効期限: {new Date(shareExpiresAt).toLocaleString("ja-JP")}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <Button onClick={handleCreateShareLink} disabled={shareLoading || !shareTicket}>
+                {shareLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                リンクを発行
+              </Button>
+            )}
+          </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelTransferDialogOpen(false)}>
-              戻る
-            </Button>
-            <Button variant="destructive" onClick={handleCancelTransfer} disabled={actionLoading}>
-              {actionLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <X className="h-4 w-4 mr-2" />
-              )}
-              キャンセルする
+            <Button variant="outline" onClick={() => setShareDialogOpen(false)}>
+              閉じる
             </Button>
           </DialogFooter>
         </DialogContent>

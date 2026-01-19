@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,32 +14,22 @@ import {
   WifiOff
 } from "lucide-react";
 import { useAuthStore } from "@/store/useAuthStore";
-
-interface ChatMessage {
-  id: string | number;
-  user_id: number;
-  username: string;
-  content: string;
-  created_at: string;
-  is_staff: boolean;
-}
-
-type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+import { useStaffChat, type ChatMessage } from "./useStaffChat";
 
 export default function ChatPage() {
   const { user } = useAuthStore();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const {
+    messages,
+    loading,
+    sending,
+    connectionStatus,
+    fetchMessages,
+    sendMessage,
+    reconnect,
+  } = useStaffChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const reconnectAttempts = useRef(0);
-  const reconnectEnabledRef = useRef(true);
-  const manualCloseRef = useRef(false);
   const isUserNearBottomRef = useRef(true);
 
   const scrollToBottom = (force = false) => {
@@ -59,191 +49,16 @@ export default function ChatPage() {
     isUserNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
   }, []);
 
-  // WebSocket connection
-  const connectWebSocket = useCallback(() => {
-    // 既存接続があれば閉じる（重複接続防止）
-    if (wsRef.current) {
-      manualCloseRef.current = true;
-      try {
-        wsRef.current.close();
-      } catch {
-        // ignore
+  const handleSendMessage = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const sent = await sendMessage(newMessage);
+      if (sent) {
+        setNewMessage("");
       }
-      wsRef.current = null;
-    }
-
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setConnectionStatus("error");
-      setLoading(false);
-      return;
-    }
-
-    // Build WebSocket URL
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-    if (!apiUrl) {
-      console.error("NEXT_PUBLIC_API_URL is not set");
-      setConnectionStatus("error");
-      setLoading(false);
-      return;
-    }
-    const wsProtocol = apiUrl.startsWith("https") ? "wss" : "ws";
-    const wsHost = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-    if (!wsHost) {
-      console.error("Invalid NEXT_PUBLIC_API_URL:", apiUrl);
-      setConnectionStatus("error");
-      setLoading(false);
-      return;
-    }
-    const wsUrl = `${wsProtocol}://${wsHost}/ws/chat/?token=${token}`;
-
-    setConnectionStatus("connecting");
-
-    let ws: WebSocket;
-    try {
-      manualCloseRef.current = false;
-      ws = new WebSocket(wsUrl);
-    } catch (e) {
-      console.error("Failed to create WebSocket:", e);
-      setConnectionStatus("error");
-      setLoading(false);
-      return;
-    }
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setConnectionStatus("connected");
-      reconnectAttempts.current = 0;
-      console.log("WebSocket connected");
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === "history") {
-          // Initial history load
-          setMessages(data.messages || []);
-          setLoading(false);
-        } else if (data.type === "message") {
-          // New message received
-          setMessages((prev) => [...prev, data]);
-        } else if (data.type === "error") {
-          console.error("Chat error:", data.message);
-        }
-      } catch (e) {
-        console.error("Failed to parse WebSocket message:", e);
-      }
-    };
-
-    ws.onclose = (event) => {
-      setConnectionStatus("disconnected");
-      console.log("WebSocket disconnected:", event.code);
-
-      // 意図的に閉じた場合（画面遷移/StrictModeのクリーンアップ等）は再接続しない
-      if (!reconnectEnabledRef.current || manualCloseRef.current) {
-        return;
-      }
-      
-      // Auto-reconnect with exponential backoff
-      if (event.code !== 4001) { // 4001 = unauthorized, don't retry
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
-        reconnectAttempts.current++;
-        
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log(`Reconnecting... (attempt ${reconnectAttempts.current})`);
-          connectWebSocket();
-        }, delay);
-      }
-    };
-
-    ws.onerror = () => {
-      setConnectionStatus("error");
-      setLoading(false);
-    };
-  }, []);
-
-  // Disconnect WebSocket
-  const disconnectWebSocket = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
-    if (wsRef.current) {
-      manualCloseRef.current = true;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-  }, []);
-
-  // Send message via WebSocket
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || sending) return;
-
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      setSending(true);
-      wsRef.current.send(JSON.stringify({
-        type: "message",
-        content: newMessage.trim()
-      }));
-      setNewMessage("");
-      setSending(false);
-    } else {
-      // Fallback to REST API if WebSocket is not connected
-      setSending(true);
-      try {
-        const token = localStorage.getItem("access_token");
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-        const res = await fetch(`${apiUrl}/api/chat/messages/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ content: newMessage.trim() }),
-        });
-
-        if (res.ok) {
-          setNewMessage("");
-          // Message will come via WebSocket, or fetch if disconnected
-        }
-      } catch (error) {
-        console.error("Failed to send message:", error);
-      } finally {
-        setSending(false);
-      }
-    }
-  };
-
-  // Fetch messages via REST (fallback)
-  const fetchMessages = async () => {
-    try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/chat/messages/`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setMessages(Array.isArray(data) ? data : []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch messages:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Connect on mount
-  useEffect(() => {
-    reconnectEnabledRef.current = true;
-    connectWebSocket();
-    
-    return () => {
-      reconnectEnabledRef.current = false;
-      disconnectWebSocket();
-    };
-  }, [connectWebSocket, disconnectWebSocket]);
+    },
+    [newMessage, sendMessage]
+  );
 
   // 初回ロード完了時に一番下へスクロール
   const initialScrollDone = useRef(false);
@@ -274,14 +89,16 @@ export default function ChatPage() {
   };
 
   // Group messages by date
-  const groupedMessages = messages.reduce((groups, message) => {
-    const date = formatDate(message.created_at);
-    if (!groups[date]) {
-      groups[date] = [];
-    }
-    groups[date].push(message);
-    return groups;
-  }, {} as Record<string, ChatMessage[]>);
+  const groupedMessages = useMemo(() => {
+    return messages.reduce((groups, message) => {
+      const date = formatDate(message.created_at);
+      if (!groups[date]) {
+        groups[date] = [];
+      }
+      groups[date].push(message);
+      return groups;
+    }, {} as Record<string, ChatMessage[]>);
+  }, [messages]);
 
   const getStatusColor = () => {
     switch (connectionStatus) {
@@ -316,8 +133,7 @@ export default function ChatPage() {
           size="sm" 
           onClick={() => {
             if (connectionStatus !== "connected") {
-              disconnectWebSocket();
-              connectWebSocket();
+              reconnect();
             } else {
               fetchMessages();
             }
@@ -404,7 +220,7 @@ export default function ChatPage() {
         </CardContent>
 
         <div className="p-4 border-t bg-white">
-          <form onSubmit={sendMessage} className="flex gap-2">
+          <form onSubmit={handleSendMessage} className="flex gap-2">
             <Input
               placeholder="メッセージを入力..."
               value={newMessage}

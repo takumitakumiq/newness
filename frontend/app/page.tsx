@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Ticket, Sparkles, ArrowRight, LogOut, User, AlertTriangle, Info, AlertCircle, Sun, Moon } from "lucide-react";
+import { Ticket, Sparkles, ArrowRight, LogOut, User, AlertTriangle, Info, AlertCircle, Sun, Moon, ShieldCheck, Timer, BadgeCheck, HelpCircle, Smartphone, MapPin, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TimeSlotPicker } from "@/components/TimeSlotPicker";
 import { AttributeSelector } from "@/components/AttributeSelector";
@@ -30,6 +30,10 @@ export default function HomePage() {
   const [mounted, setMounted] = useState(false);
   
   const { addItem, getCountByAttribute, totalCount } = useCartStore();
+  const cartCount = totalCount();
+  const step1Done = !!selectedAttribute;
+  const step2Done = !!selectedSlot;
+  const step3Done = cartCount > 0;
 
   // クライアントサイドのマウント確認
   useEffect(() => {
@@ -56,7 +60,11 @@ export default function HomePage() {
 
   // Fetch initial data only when authenticated
   useEffect(() => {
-    async function fetchData() {
+    let cancelled = false;
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function fetchData(attempt = 0) {
       if (!isAuthenticated) {
         setLoading(false);
         return;
@@ -68,16 +76,29 @@ export default function HomePage() {
           getSlots(),
           getAttributes(),
         ]);
+        if (cancelled) return;
         setSlots(slotsData);
         setAttributes(attributesData);
+        setError(null);
       } catch (err) {
+        if (cancelled) return;
+        if (attempt < 1) {
+          await sleep(800);
+          return fetchData(attempt + 1);
+        }
         setError("データの取得に失敗しました。ページを再読み込みしてください。");
         console.error(err);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
+
     fetchData();
+    return () => {
+      cancelled = true;
+    };
   }, [isAuthenticated]);
 
   // Handle adding ticket to cart
@@ -239,23 +260,188 @@ export default function HomePage() {
           <motion.h2
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-white via-purple-200 to-cyan-200 bg-clip-text text-transparent"
+            className="text-3xl md:text-4xl font-bold text-foreground dark:bg-gradient-to-r dark:from-white dark:via-purple-200 dark:to-cyan-200 dark:bg-clip-text dark:text-transparent"
           >
             入場チケットを予約する
           </motion.h2>
-          <p className="text-muted-foreground max-w-xl mx-auto">
-            ご希望の日時と入場者の種別を選択して、チケットをカートに追加してください。
+          <p className="max-w-xl mx-auto text-slate-700 dark:text-slate-200/90">
+            ① 種別 → ② 時間 → ③ 確認 の3ステップ。初めてでも迷わず購入できます。
           </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+            <Button
+              variant="neon"
+              size="lg"
+              onClick={() => {
+                const el = document.getElementById("booking-steps");
+                el?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
+              今すぐ予約を始める
+              <ArrowRight className="ml-2 h-5 w-5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                const el = document.getElementById("faq");
+                el?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+            >
+              よくある質問を見る
+            </Button>
+          </div>
+        </section>
+
+        {/* Value Props */}
+        <section className="grid gap-4 md:grid-cols-3">
+          <div className="glass rounded-xl p-5 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <ShieldCheck className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">安心・安全</p>
+                <h3 className="font-semibold text-foreground">在庫ロックで確実予約</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              予約確定時に枠をロック。ダブルブッキングを防ぎます。
+            </p>
+          </div>
+          <div className="glass rounded-xl p-5 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <Timer className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">スピーディ</p>
+                <h3 className="font-semibold text-foreground">3分で予約完了</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              種別と時間を選ぶだけ。スマホでも操作しやすいUIです。
+            </p>
+          </div>
+          <div className="glass rounded-xl p-5 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <BadgeCheck className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">確実</p>
+                <h3 className="font-semibold text-foreground">QRで入場がスムーズ</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              予約後はマイページからQRを提示するだけ。
+            </p>
+          </div>
+        </section>
+
+        {/* Quick Guide */}
+        <section className="grid gap-4 md:grid-cols-3">
+          <div className="glass rounded-xl p-4 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <User className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">STEP 1</p>
+                <h3 className="font-semibold text-foreground">入場者の種別を選ぶ</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              在校生・保護者・一般など、該当する種別を選択します。
+            </p>
+          </div>
+          <div className="glass rounded-xl p-4 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <Ticket className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">STEP 2</p>
+                <h3 className="font-semibold text-foreground">時間枠を選ぶ</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              空き状況を見ながら、希望の時間を選択します。
+            </p>
+          </div>
+          <div className="glass rounded-xl p-4 border border-festival-neon/20">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <ArrowRight className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">STEP 3</p>
+                <h3 className="font-semibold text-foreground">カートに追加 → 購入</h3>
+              </div>
+            </div>
+            <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+              カートで内容を確認し、購入手続きへ進みます。
+            </p>
+          </div>
+        </section>
+
+        {/* Requirements */}
+        <section className="glass rounded-2xl p-6 border border-festival-neon/20">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+              <Smartphone className="h-5 w-5 text-festival-neon" />
+            </div>
+            <div>
+              <h3 className="text-xl font-semibold text-foreground">予約に必要なもの</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300">事前準備でスムーズに購入できます</p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {["メールアドレス", "入場者のお名前", "希望の日時", "スマートフォン"].map((item) => (
+              <div key={item} className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                <CheckCircle className="h-4 w-4 text-emerald-400" />
+                <span>{item}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Sticky Progress */}
+        <section className="sticky top-20 z-30">
+          <div className="glass rounded-xl p-3 border border-border/50 no-print">
+            <div className="grid grid-cols-3 gap-2 text-sm">
+              {[
+                { label: "種別を選択", done: step1Done },
+                { label: "時間を選択", done: step2Done },
+                { label: "カート確認", done: step3Done },
+              ].map((step, index) => (
+                <div key={step.label} className="flex items-center gap-2">
+                  <span
+                    className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                      step.done ? "bg-festival-neon text-black" : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {step.done ? <CheckCircle className="h-4 w-4" /> : index + 1}
+                  </span>
+                  <span className={step.done ? "text-foreground" : "text-muted-foreground"}>
+                    {step.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </section>
 
         {/* Step 1: Select Attribute */}
-        <section className="space-y-4">
+        <section className="space-y-4" id="booking-steps">
           <div className="flex items-center gap-2">
             <span className="flex items-center justify-center w-8 h-8 rounded-full bg-festival-neon text-black font-bold text-sm">
               1
             </span>
             <h3 className="text-xl font-semibold">入場者の種別を選択</h3>
           </div>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            同じ種別の上限枚数に達すると追加できません。
+          </p>
           <AttributeSelector
             attributes={attributes}
             selectedAttributeId={selectedAttribute?.id}
@@ -272,6 +458,9 @@ export default function HomePage() {
             </span>
             <h3 className="text-xl font-semibold">入場時間を選択</h3>
           </div>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            「残りわずか」「完売」表示で空き状況がわかります。
+          </p>
           <TimeSlotPicker
             slots={slots}
             selectedSlotId={selectedSlot?.id}
@@ -280,7 +469,7 @@ export default function HomePage() {
         </section>
 
         {/* Add to Cart Button */}
-        <section className="flex justify-center">
+        <section className="flex flex-col items-center gap-3">
           <Button
             size="lg"
             variant="neon"
@@ -291,6 +480,61 @@ export default function HomePage() {
             カートに追加
             <ArrowRight className="ml-2 h-5 w-5" />
           </Button>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            追加後は画面下部のカートから「購入へ進む」をタップしてください。
+          </p>
+        </section>
+
+        {/* FAQ */}
+        <section className="space-y-4" id="faq">
+          <div className="flex items-center gap-2">
+            <HelpCircle className="h-5 w-5 text-festival-neon" />
+            <h3 className="text-xl font-semibold">よくある質問</h3>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="glass rounded-xl p-4 border border-border/50">
+              <h4 className="font-semibold text-foreground">予約後の確認はどこでできますか？</h4>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                マイページでQRと予約内容を確認できます。
+              </p>
+            </div>
+            <div className="glass rounded-xl p-4 border border-border/50">
+              <h4 className="font-semibold text-foreground">家族分をまとめて予約できますか？</h4>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                種別ごとの上限枚数内でまとめて購入できます。
+              </p>
+            </div>
+            <div className="glass rounded-xl p-4 border border-border/50">
+              <h4 className="font-semibold text-foreground">空きがない枠は選べますか？</h4>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                「完売」の枠は選択できません。別の枠をお選びください。
+              </p>
+            </div>
+            <div className="glass rounded-xl p-4 border border-border/50">
+              <h4 className="font-semibold text-foreground">当日の入場はどうすればいいですか？</h4>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                マイページのQRコードを提示して入場します。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Support */}
+        <section className="glass rounded-2xl p-6 border border-border/50">
+          <div className="flex items-center justify-between flex-col md:flex-row gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-festival-neon/20 flex items-center justify-center">
+                <MapPin className="h-5 w-5 text-festival-neon" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-foreground">困ったときは</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  当日は受付スタッフにお声がけください。
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" onClick={() => router.push("/mypage")}>マイページを確認</Button>
+          </div>
         </section>
       </main>
 

@@ -6,6 +6,7 @@ import {
   LineChart, Line, PieChart, Pie, Cell, AreaChart, Area, Legend
 } from "recharts";
 import { RefreshCw, TrendingUp, Calendar, Users, Ticket, Clock } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface Stats {
   summary: {
@@ -29,12 +30,8 @@ export default function StatisticsPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/admin/statistics/`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) setData(await res.json());
+      const json = await fetchApi<Stats>("/admin/statistics");
+      setData(json);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };

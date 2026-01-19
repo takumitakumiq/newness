@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { RefreshCw, Plus, Edit2, Trash2, X, Check, MessageSquare, Calendar, ToggleLeft, ToggleRight } from "lucide-react";
+import { fetchApi } from "@/lib/api";
 
 interface Announcement {
   id: number;
@@ -24,15 +25,10 @@ export default function AnnouncementsPage() {
   const fetchAnnouncements = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/announcements/`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAnnouncements(Array.isArray(data) ? data : data.results || []);
-      }
+      const data = await fetchApi<{ results: Announcement[] } | Announcement[]>(
+        "/announcements"
+      );
+      setAnnouncements(Array.isArray(data) ? data : data.results || []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -41,44 +37,31 @@ export default function AnnouncementsPage() {
 
   const save = async () => {
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const isEditing = editing !== null;
-      const res = await fetch(`${apiUrl}/api/announcements/${isEditing ? editing.id + "/" : ""}`, {
+      await fetchApi(`/announcements${isEditing ? `/${editing.id}` : ""}` , {
         method: isEditing ? "PATCH" : "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      if (res.ok) {
-        fetchAnnouncements();
-        closeModal();
-      }
+      fetchAnnouncements();
+      closeModal();
     } catch (e) { console.error(e); }
   };
 
   const toggleActive = async (a: Announcement) => {
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/announcements/${a.id}/`, {
+      await fetchApi(`/announcements/${a.id}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ is_active: !a.is_active }),
       });
-      if (res.ok) fetchAnnouncements();
+      fetchAnnouncements();
     } catch (e) { console.error(e); }
   };
 
   const remove = async (id: number) => {
     if (!confirm("削除しますか？")) return;
     try {
-      const token = localStorage.getItem("access_token");
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/api/announcements/${id}/`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) fetchAnnouncements();
+      await fetchApi(`/announcements/${id}`, { method: "DELETE" });
+      fetchAnnouncements();
     } catch (e) { console.error(e); }
   };
 
