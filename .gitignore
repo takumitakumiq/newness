@@ -12,3 +12,6 @@ frontend/build_output_2/
 tmp/
 test_dir/
 .next/
+.venv/
+venv/
+backend/.deps_installed
