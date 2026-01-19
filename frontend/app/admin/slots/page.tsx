@@ -14,7 +14,6 @@ interface Slot {
   capacity: number;
   booked_count: number;
   remaining: number;
-  is_available: boolean;
   is_active: boolean;
 }
 
@@ -23,7 +22,7 @@ export default function SlotsPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Slot | null>(null);
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ event_date: "", start_time: "", end_time: "", capacity: 50, is_available: true });
+  const [form, setForm] = useState({ event_date: "", start_time: "", end_time: "", capacity: 50, is_active: true });
 
   const fetchSlots = async () => {
     setLoading(true);
@@ -40,7 +39,7 @@ export default function SlotsPage() {
     try {
       await fetchApi(`/slots/${slot.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ is_available: !slot.is_available }),
+        body: JSON.stringify({ is_active: !slot.is_active }),
       });
       fetchSlots();
     } catch (e) { console.error(e); alert("エラーが発生しました"); }
@@ -54,7 +53,7 @@ export default function SlotsPage() {
         body: JSON.stringify({
           ...form,
           capacity: Number(form.capacity),
-          is_active: true,
+          is_active: form.is_active,
         }),
       });
       fetchSlots();
@@ -73,7 +72,7 @@ export default function SlotsPage() {
   const closeModal = () => {
     setCreating(false);
     setEditing(null);
-    setForm({ event_date: "", start_time: "", end_time: "", capacity: 50, is_available: true });
+    setForm({ event_date: "", start_time: "", end_time: "", capacity: 50, is_active: true });
   };
 
   const openEdit = (slot: Slot) => {
@@ -83,7 +82,7 @@ export default function SlotsPage() {
       start_time: slot.start_time,
       end_time: slot.end_time,
       capacity: slot.capacity,
-      is_available: slot.is_available,
+      is_active: slot.is_active,
     });
   };
 
@@ -102,7 +101,7 @@ export default function SlotsPage() {
           <p className="text-sm text-slate-500">{slots.length} 枠</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={() => { setCreating(true); setForm({ event_date: "", start_time: "", end_time: "", capacity: 50, is_available: true }); }}>
+          <Button onClick={() => { setCreating(true); setForm({ event_date: "", start_time: "", end_time: "", capacity: 50, is_active: true }); }}>
             <Plus className="h-4 w-4 mr-1" />新規
           </Button>
           <Button variant="outline" size="icon" onClick={fetchSlots}><RefreshCw className="h-4 w-4" /></Button>
@@ -138,11 +137,11 @@ export default function SlotsPage() {
               </div>
               <div 
                 className="flex items-center justify-between py-3 px-2 rounded-lg hover:bg-slate-50 cursor-pointer"
-                onClick={() => setForm(f => ({ ...f, is_available: !f.is_available }))}
+                onClick={() => setForm(f => ({ ...f, is_active: !f.is_active }))}
               >
                 <span className="text-sm text-slate-600">予約受付を有効にする</span>
-                <div className={`relative w-12 h-6 rounded-full transition-colors ${form.is_available ? "bg-emerald-500" : "bg-slate-300"}`}>
-                  <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.is_available ? "translate-x-6" : "translate-x-0.5"}`} />
+                <div className={`relative w-12 h-6 rounded-full transition-colors ${form.is_active ? "bg-emerald-500" : "bg-slate-300"}`}>
+                  <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.is_active ? "translate-x-6" : "translate-x-0.5"}`} />
                 </div>
               </div>
               <div className="flex gap-2">
@@ -178,14 +177,14 @@ export default function SlotsPage() {
                 {dateSlots.sort((a, b) => a.start_time.localeCompare(b.start_time)).map(slot => {
                   const fillRate = slot.capacity > 0 ? (slot.booked_count / slot.capacity) * 100 : 0;
                   return (
-                    <div key={slot.id} className={`bg-white rounded-xl border p-4 transition ${slot.is_available ? "border-slate-200" : "border-rose-200 bg-rose-50/50"}`}>
+                    <div key={slot.id} className={`bg-white rounded-xl border p-4 transition ${slot.is_active ? "border-slate-200" : "border-rose-200 bg-rose-50/50"}`}>
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 text-slate-400" />
                           <span className="font-semibold text-slate-900">{slot.start_time?.slice(0, 5)} - {slot.end_time?.slice(0, 5)}</span>
                         </div>
-                        <button onClick={() => toggleAvailability(slot)} className={`p-1 rounded ${slot.is_available ? "text-emerald-600" : "text-slate-400"}`}>
-                          {slot.is_available ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                        <button onClick={() => toggleAvailability(slot)} className={`p-1 rounded ${slot.is_active ? "text-emerald-600" : "text-slate-400"}`}>
+                          {slot.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
                         </button>
                       </div>
                       <div className="flex items-center gap-2 mb-2">

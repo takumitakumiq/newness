@@ -25,6 +25,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction, models
 from django.db.models import Count
 from django.contrib.auth.models import User
+from django.db.models.deletion import ProtectedError
 
 from .models import (
     EntrySlot, AttributeConfig, Reservation, Ticket, CheckInLog, Announcement,
@@ -126,6 +127,9 @@ def _user_in_group(user, group_name: str) -> bool:
         return False
     if user.is_superuser:
         return True
+    # 開発・小規模運用でグループ未割当のスタッフは許可（既存運用の利便性優先）
+    if user.is_staff and not user.groups.exists():
+        return True
     return user.groups.filter(name=group_name).exists()
 
 
@@ -177,6 +181,8 @@ def _get_client_ip(request) -> str:
 
 
 def _check_checkout_block(setting: SystemSetting):
+    if setting.emergency_stop:
+        return Response({"success": False, "message": setting.emergency_message or "緊急停止中です"}, status=status.HTTP_423_LOCKED)
     if setting.maintenance_mode:
         return Response({"success": False, "message": "メンテナンス中のため購入できません"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     if setting.operation_mode in [
@@ -246,6 +252,23 @@ class EntrySlotViewSet(viewsets.ModelViewSet):
         if self.request.user.is_staff:
             return EntrySlot.objects.all()
         return EntrySlot.objects.filter(is_active=True)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            # 予約済みチケットがある枠は物理削除できないため無効化に切替
+            instance.is_active = False
+            instance.entry_closed = True
+            instance.save(update_fields=["is_active", "entry_closed"])
+            return Response(
+                {
+                    "success": True,
+                    "soft_deleted": True,
+                    "message": "予約済みチケットがあるため、時間枠を無効化しました",
+                }
+            )
 
 
 class AttributeConfigViewSet(viewsets.ModelViewSet):
