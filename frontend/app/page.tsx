@@ -140,11 +140,11 @@ export default function HomePage() {
   const getAnnouncementStyle = (priority: string) => {
     switch (priority) {
       case 'critical':
-        return "bg-red-500/20 border-red-500/50 text-red-200";
+        return "bg-red-50 border-red-200 text-red-800 dark:bg-red-500/20 dark:border-red-500/50 dark:text-red-200";
       case 'warning':
-        return "bg-yellow-500/20 border-yellow-500/50 text-yellow-200";
+        return "bg-yellow-50 border-yellow-200 text-yellow-900 dark:bg-yellow-500/20 dark:border-yellow-500/50 dark:text-yellow-200";
       default:
-        return "bg-blue-500/20 border-blue-500/50 text-blue-200";
+        return "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-500/20 dark:border-blue-500/50 dark:text-blue-200";
     }
   };
 
