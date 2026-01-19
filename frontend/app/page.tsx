@@ -172,23 +172,23 @@ export default function HomePage() {
 
   return (
     <MaintenanceCheck>
-    <div className="min-h-screen pb-24">
+    <div className="min-h-screen pb-20 sm:pb-24">
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
               <img
                 src="/matsu-logo.svg"
                 alt="MATSU ロゴ"
-                className="h-9 w-9 rounded-md bg-white p-1 border border-slate-200"
+                className="h-8 w-8 sm:h-9 sm:w-9 rounded-md bg-white p-1 border border-slate-200"
               />
               <div>
-                <h1 className="text-xl font-bold">MATSU</h1>
-                <p className="text-xs text-muted-foreground">洛星文化祭チケット</p>
+                <h1 className="text-lg sm:text-xl font-bold">MATSU</h1>
+                <p className="text-xs text-muted-foreground hidden sm:block">洛星文化祭チケット</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               {/* Theme Toggle */}
               {mounted && (
                 <button
@@ -197,26 +197,31 @@ export default function HomePage() {
                   title={theme === "dark" ? "ライトモードに切り替え" : "ダークモードに切り替え"}
                 >
                   {theme === "dark" ? (
-                    <Sun className="h-5 w-5 text-yellow-400" />
+                    <Sun className="h-4 w-4 sm:h-5 sm:w-5 text-yellow-400" />
                   ) : (
-                    <Moon className="h-5 w-5 text-slate-600" />
+                    <Moon className="h-4 w-4 sm:h-5 sm:w-5 text-slate-600" />
                   )}
                 </button>
               )}
               <Button
                 variant="ghost"
+                size="sm"
                 onClick={() => router.push("/mypage")}
+                className="text-xs sm:text-sm"
               >
-                <User className="h-4 w-4 mr-2" />
-                マイページ
+                <User className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">マイページ</span>
+                <span className="sm:hidden">マイ</span>
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleLogout}
+                className="text-xs sm:text-sm"
               >
-                <LogOut className="h-4 w-4 mr-2" />
-                ログアウト
+                <LogOut className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">ログアウト</span>
+                <span className="sm:hidden">OUT</span>
               </Button>
             </div>
           </div>
@@ -224,7 +229,7 @@ export default function HomePage() {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-8 space-y-12">
+      <main className="container mx-auto px-3 sm:px-4 py-6 sm:py-8 space-y-8 sm:space-y-12">
         {/* Announcements */}
         {announcements.length > 0 && (
           <section className="space-y-3">

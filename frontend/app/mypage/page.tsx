@@ -305,38 +305,40 @@ export default function MyPage() {
     <div className="min-h-screen pb-8">
       {/* Header */}
       <header className="sticky top-0 z-40 glass border-b no-print">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+        <div className="container mx-auto px-3 sm:px-4 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-4">
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => router.push("/")}
+                className="h-8 w-8 sm:h-10 sm:w-10"
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
               </Button>
               <div className="flex items-center gap-2">
-                <Wallet className="h-5 w-5 text-festival-neon" />
-                <h1 className="text-xl font-bold">マイページ</h1>
+                <Wallet className="h-4 w-4 sm:h-5 sm:w-5 text-festival-neon" />
+                <h1 className="text-lg sm:text-xl font-bold">マイページ</h1>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               {/* Theme Toggle */}
               <button
                 onClick={toggleTheme}
-                className="p-2 rounded-lg hover:bg-muted transition-colors"
+                className="p-1.5 sm:p-2 rounded-lg hover:bg-muted transition-colors"
                 title={theme === "dark" ? "ライトモードに切り替え" : "ダークモードに切り替え"}
               >
                 {theme === "dark" ? (
-                  <Sun className="h-5 w-5 text-yellow-400" />
+                  <Sun className="h-4 w-4 sm:h-5 sm:w-5 text-yellow-400" />
                 ) : (
-                  <Moon className="h-5 w-5 text-slate-600" />
+                  <Moon className="h-4 w-4 sm:h-5 sm:w-5 text-slate-600" />
                 )}
               </button>
               {isAuthenticated && (
-                <Button variant="ghost" size="sm" onClick={handleLogout}>
-                  <LogOut className="h-4 w-4 mr-2" />
-                  ログアウト
+                <Button variant="ghost" size="sm" onClick={handleLogout} className="text-xs sm:text-sm">
+                  <LogOut className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">ログアウト</span>
+                  <span className="sm:hidden">OUT</span>
                 </Button>
               )}
             </div>
@@ -344,7 +346,7 @@ export default function MyPage() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 max-w-2xl space-y-8">
+      <main className="container mx-auto px-3 sm:px-4 py-6 sm:py-8 max-w-2xl space-y-6 sm:space-y-8">
         {!isAuthenticated ? (
           /* Login/Register Form */
           <Card className="glass">
