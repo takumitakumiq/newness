@@ -127,9 +127,6 @@ def _user_in_group(user, group_name: str) -> bool:
         return False
     if user.is_superuser:
         return True
-    # 開発・小規模運用でグループ未割当のスタッフは許可（既存運用の利便性優先）
-    if user.is_staff and not user.groups.exists():
-        return True
     return user.groups.filter(name=group_name).exists()
 
 
