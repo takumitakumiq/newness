@@ -1,224 +1,203 @@
-# 🎪 MATSU - 洛星文化祭チケット予約・管理システム
+\# 🎪 MATSU - 洛星文化祭チケット予約・管理システム
 
-![Status](https://img.shields.io/badge/status-active-success.svg)
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
-![Tech](https://img.shields.io/badge/tech-Next.js%20%7C%20Django%20%7C%20SQLite-green.svg)
-
-## 👋 次期開発者・運用担当者の方へ
-
-このドキュメントは、**「システムの中身を全く知らない人が、今日から開発・運用を完全に引き継げるように」** という目的で書かれています。
-単なる予約システムではなく、**譲渡機能**や**スタッフ間チャット**まで備えた統合プラットフォームです。まずはこの地図（README）で全体像を把握してください。
+MATSU は、文化祭の「チケット予約」「QRチェックイン」「スタッフチャット」「管理・監査」をまとめた運用システムです。
+引き継ぎを前提に、起動手順・URL・運用ポイントをこの README に集約しています。
 
 ---
 
-## 📚 目次
+\## ✅ まず動かす（最短）
 
-1. [システム概要（何ができるの？）](#-システム概要何ができるの)
-2. [クイックスタート（まずは動かそう）](#-クイックスタートまずは動かそう)
-3. [システム構成図（アーキテクチャ）](#-システム構成図アーキテクチャ)
-4. [データベース設計（ER図）](#-データベース設計er図)
-5. [重要な機能とデータの流れ](#-重要な機能とデータの流れ)
-    - [1. 予約と排他制御](#1-予約と排他制御)
-    - [2. チケット譲渡機能](#2-チケット譲渡機能)
-6. [ディレクトリ構造](#-ディレクトリ構造)
-7. [運用・メンテナンス](#-運用メンテナンス)
+### 必須要件
 
----
+- Node.js（推奨: LTS）
+- Python 3
 
-## 🌟 システム概要（何ができるの？）
-
-**「MATSU」** は、文化祭運営のDX（デジタルトランスフォーメーション）を実現するフルスタックシステムです。
-
-### 🎯 3つの主要ターゲットと機能
-
-| ターゲット | 主な機能 |
-|---|---|
-| **一般来場者** | ✅ **チケット予約**: 属性（一般/保護者）ごとの定員管理<br>✅ **チケット譲渡**: 行けなくなったチケットを友人にLINE等で送付<br>✅ **マイページ**: QRコード表示、予約履歴確認 |
-| **運営スタッフ** | ✅ **QRチェックイン**: スマホカメラで0.5秒入場受付<br>✅ **スタッフチャット**: トランシーバー代わりのリアルタイム連絡<br>✅ **リアルタイム監視**: 現在の入場者数をグラフで確認 |
-| **システム管理者** | ✅ **動的フォーム**: 「中学生には学校名を聞く」等の設定を管理画面で変更<br>✅ **緊急お知らせ**: サイトトップに警告文を表示<br>✅ **システム管理**: DBバックアップ、ログ確認、キャッシュクリア |
-
----
-
-## 🚀 クイックスタート（まずは動かそう）
-
-複雑な環境構築は不要です。スクリプト一発で立ち上がります。
-
-### 手順
-
-1.  **ターミナルを開く**
-2.  **以下のコマンドを実行**
+### 起動
 
 ```bash
-# 実行権限を与える（初回のみ）
 chmod +x start_system.sh
-
-# システムを起動する
 ./start_system.sh
 ```
 
-これだけで、バックエンド(Django)とフロントエンド(Next.js)が同時に起動します。
+`start_system.sh` は次を自動で行います。
 
-### アクセスURL
+- Python venv 作成/有効化（`./.venv`）
+- Backend 依存のインストール + migrate
+- Frontend 依存のインストール（`node_modules` が無い場合）
+- Frontend の `NEXT_PUBLIC_API_URL` を `http://localhost:8005` に設定して起動
 
-| 画面 | URL | ログイン情報 |
+### ローカルURL（デフォルト）
+
+| 種別 | URL | 備考 |
 |---|---|---|
-| **予約サイト** | [http://localhost:3006](http://localhost:3006) | (ユーザー登録して利用) |
-| **スタッフ画面** | [http://localhost:3006/staff](http://localhost:3006/staff) | (スタッフ権限ユーザー) |
-| **管理者ダッシュボード** | [http://localhost:3006/admin](http://localhost:3006/admin) | ID: `admin` / PW: `admin` |
-| **Django管理画面** | [http://localhost:8005/admin](http://localhost:8005/admin) | ID: `admin` / PW: `admin` |
+| 予約サイト（来場者） | http://localhost:3006 | ログイン/予約/マイページ |
+| スタッフ画面 | http://localhost:3006/staff | スタッフ権限が必要 |
+| 管理ダッシュボード（Next） | http://localhost:3006/admin | UI は Next 側 |
+| Django 管理画面 | http://localhost:8005/admin | ID/PW: `admin` / `admin`（初期データがある場合） |
+| Backend API | http://localhost:8005/api | REST の入口 |
 
 ---
 
-## 🤖 Copilotを使った開発（おすすめ運用）
+\## 🧱 構成（アーキテクチャ）
 
-このリポジトリは「引き継ぎ前提」なので、Copilotは **役割分割（サブエージェント運用）** で使うのがおすすめです。
-
-- 運用フロー: [docs/COPILOT_WORKFLOW.md](docs/COPILOT_WORKFLOW.md)
-- コピペ用プロンプト集: [docs/COPILOT_PROMPTS.md](docs/COPILOT_PROMPTS.md)
-
-基本は次の順で進めます：
-
-1. 仕様/PM（受け入れ条件ACを作る）
-2. 調査（触るファイルを特定）
-3. 実装（最小差分でパッチ）
-4. テスト/レビュー（回帰潰し）
-
----
-
-## 🏗 システム構成図（アーキテクチャ）
+- Frontend: Next.js (App Router) / Tailwind / Zustand
+- Backend: Django / DRF / SimpleJWT / Channels
+- DB: 開発は SQLite か PostgreSQL
 
 ```mermaid
 graph TD
-    subgraph Client ["クライアント端末"]
-        UserPhone["📱 来場者スマホ<br>(予約/譲渡/QR表示)"]
-        StaffPhone["📱 スタッフスマホ<br>(QR読取/チャット)"]
-        AdminPC["💻 管理者PC<br>(設定/分析)"]
-    end
-
-    subgraph Frontend ["フロントエンド (Next.js:3006)"]
-        Pages["App Router Pages"]
-        Store["Zustand Store<br>(カート/認証状態)"]
-        APIClient["API Client"]
-    end
-
-    subgraph Backend ["バックエンド (Django:8005)"]
-        API["REST API (DRF)"]
-        Auth["JWT認証"]
-        Logic["ビジネスロジック<br>(在庫管理/譲渡処理)"]
-        AdminPanel["管理パネル"]
-    end
-
-    subgraph Database ["データベース"]
-        SQLite[(SQLite3 / PostgreSQL)]
-    end
-
-    UserPhone -->|HTTPS| Pages
-    StaffPhone -->|HTTPS| Pages
-    AdminPC -->|HTTPS| Pages
-    
-    Pages --> APIClient
-    APIClient -->|JSON| API
-    
-    API --> Logic
-    Logic -->|SQL| SQLite
-    AdminPanel --> Logic
+  U[ブラウザ] --> FE[Next.js :3006]
+  FE -->|REST| BE[Django/DRF :8005]
+  FE -->|WS| BE
+  BE --> DB[(DB)]
 ```
 
 ---
 
-## 💾 データベース設計（ER図）
+\## 🌟 できること（現行仕様）
 
-システムの中枢となるデータ構造です。**「予約」だけでなく「譲渡」「チャット」「お知らせ」も管理している**点に注目してください。
+### 来場者
 
-```mermaid
-erDiagram
-    %% コア機能：予約
-    EntrySlot ||--|{ Ticket : "在庫管理"
-    AttributeConfig ||--|{ Ticket : "属性ルール"
-    Reservation ||--|{ Ticket : "購入単位"
-    User ||--o{ Reservation : "予約者"
-    
-    %% 機能：チケット
-    Ticket {
-        uuid id PK "QRコードの中身"
-        json guest_info "動的フォーム回答"
-        string status "有効/入場済"
-    }
-    
-    %% 機能：譲渡 (Transfer)
-    Ticket ||--o{ TicketTransfer : "譲渡履歴"
-    User ||--o{ TicketTransfer : "送信/受信"
-    TicketTransfer {
-        string token "譲渡用URLトークン"
-        datetime expires_at "有効期限"
-        string status "未受取/受取済"
-    }
+- 予約（入場枠 + 種別）・動的フォーム入力
+- マイページでチケット（QR）表示、情報修正、キャンセル
+- チケット単位の「閲覧専用共有リンク」を発行（期限付き）
 
-    %% 機能：スタッフチャット
-    User ||--o{ ChatMessage : "送信"
-    ChatMessage {
-        string content "メッセージ内容"
-        datetime created_at "送信日時"
-    }
+### スタッフ
 
-    %% 機能：お知らせ & クーポン
-    EntrySlot ||--o{ Announcement : "枠限定のお知らせ"
-    PromoCode {
-        string code "割引コード"
-        int discount_amount "割引額"
-    }
+- QR チェックイン（単発/バッチ同期）
+- 例外対応（手動チェックイン、取り消し）
+- スタッフチャット（WebSocket + 既読/未読）
+
+### 管理者
+
+- 入場枠/属性/お知らせの管理
+- 緊急停止・メンテナンス・購入停止などの運用切替
+- 端末ID別の集計、監査ログ、バックアップ/ログ閲覧
+
+---
+
+\## 🔐 認証と接続先（重要）
+
+### REST API
+
+- ベース: `http(s)://<host>/api/...`
+- Frontend は `NEXT_PUBLIC_API_URL` を参照して接続先を決めます。
+  - 例: `NEXT_PUBLIC_API_URL=http://localhost:8005`
+
+補足: `NEXT_PUBLIC_API_URL` が未設定でも、`/api/...` は Next の rewrite で `http://localhost:8005/api/...` に転送されます（開発用）。
+
+### WebSocket（スタッフチャット）
+
+- `ws(s)://<host>/ws/chat/?token=<JWT>`
+
+---
+
+\## 🧾 主要なデータ（ざっくり）
+
+- `EntrySlot`: 入場枠（日時/定員/予約数）
+- `AttributeConfig`: 種別（購入上限/動的フォーム定義）
+- `Reservation`: 予約（購入のまとまり）
+- `Ticket`: チケット（QR の中身、個別の来場者情報）
+
+予約確定（Checkout）は DB 行ロック（`select_for_update`）で過剰販売を防止します。
+
+---
+
+\## 🔗 共有リンク（チケット閲覧専用）
+
+現行仕様では「チケット譲渡（所有者変更）」は無効化しています。
+代替として、チケットの閲覧専用リンク（期限付き）を発行できます。
+
+- 共有ページ: `/share/[token]`
+- Backend: `GET /api/shares/{token}/`（認証なし、閲覧のみ）
+
+---
+
+\## 📂 ディレクトリ構成
+
+```
+.
+├── backend/                 # Django (API/管理)
+│   ├── api/                 # 主要ロジック（models/serializers/views）
+│   └── core/                # settings/urls/asgi
+├── frontend/                # Next.js (来場者/スタッフ/管理UI)
+│   ├── app/                 # ルーティング
+│   ├── components/          # UI部品
+│   ├── lib/                 # APIクライアント等
+│   └── store/               # Zustand
+├── start_system.sh          # 推奨: 統合起動スクリプト（3006/8005）
+└── start_dev.sh             # 旧: 3000/8000（用途が明確な場合のみ）
+```
+
+補足: `newness-main/` は過去スナップショット/比較用です。通常はルート直下の `backend/` と `frontend/` を編集してください。
+
+---
+
+\## 🧪 開発（分けて起動したい場合）
+
+### Backend
+
+```bash
+cd backend
+python -m venv ../.venv
+source ../.venv/bin/activate
+pip install -r requirements.txt
+
+# DBが無い/PGが無い場合（推奨）
+export USE_SQLITE=1
+
+python manage.py migrate
+python manage.py runserver 0.0.0.0:8005
+```
+
+### Frontend
+
+```bash
+cd frontend
+export NEXT_PUBLIC_API_URL="http://localhost:8005"
+npm install
+npm run dev -- -p 3006
 ```
 
 ---
 
-## 🔄 重要な機能とデータの流れ
+\## 🧯 トラブルシューティング
 
-### 1. 予約と排他制御
-人気チケットの争奪戦でも**「定員オーバー（ダブルブッキング）」を絶対に起こさない**ための仕組みです。
+### ポートが埋まって起動できない
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as ユーザー
-    participant API as バックエンド
-    participant DB as データベース
-
-    User->>API: 予約リクエスト (POST /checkout)
-    
-    Note over API, DB: 🔒 トランザクション開始
-    API->>DB: 入場枠の行をロック (select_for_update)
-    DB-->>API: ロック取得OK
-    
-    API->>DB: 現在の予約数を再確認
-    
-    alt 定員内
-        API->>DB: 予約レコード作成
-        API->>DB: 予約数カウントアップ
-        DB-->>API: コミット完了
-        API-->>User: ✅ 予約成功 (QR発行)
-    else 定員オーバー
-        DB-->>API: ロールバック
-        API-->>User: ❌ エラー (満席)
-    end
-    Note over API, DB: 🔓 ロック解除
+```bash
+lsof -ti:3006,8005 | xargs kill -9
 ```
 
-### 2. チケット譲渡機能
-「行けなくなったから友達にあげる」を実現する機能です。セキュリティのため、**一時的なトークン**を発行しています。
+### DB接続エラー（PostgreSQL が無い/接続できない）
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Owner as 譲渡する人
-    actor Friend as 受け取る人
-    participant System as システム
+開発は SQLite を使うのが最短です。
 
-    Owner->>System: 「このチケットを譲る」ボタン
-    System->>System: 譲渡トークン生成 (有効期限付き)
-    System-->>Owner: 譲渡用URLを発行
-    
-    Owner->>Friend: LINE等でURLを送信
-    
+```bash
+export USE_SQLITE=1
+```
+
+### Frontend で API に繋がらない
+
+- `NEXT_PUBLIC_API_URL` が意図した値になっているか確認
+- `start_system.sh` を使っている場合は自動設定されます
+
+---
+
+\## 🛡 運用上の注意（最低限）
+
+- 重要操作（チェックイン/管理/緊急停止など）はサーバ側の `request.user` を唯一の操作者ソースにする
+- 競合が起きうる処理（在庫・チェックイン等）は `transaction.atomic()` + `select_for_update()` + ロック後再検証
+- トークンをブラウザ保存しているため、XSS 対策（入力の取り扱い・依存更新）を継続する
+
+---
+
+\## 📚 参考ドキュメント
+
+- 仕様・受け入れ条件: `FEATURE_INSTRUCTION.md`
+- 実装意図（コード解説）: `CODE_EXPLANATION.md`
+- 運用マニュアル: `DOCUMENTATION.md`
+- Copilot 運用: `docs/COPILOT_WORKFLOW.md`, `docs/COPILOT_PROMPTS.md`
     Friend->>System: URLにアクセス
     System->>System: トークンの有効性を確認
     
