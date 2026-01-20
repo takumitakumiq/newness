@@ -56,15 +56,27 @@ export async function fetchApi<T>(
     }
   }
   
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+    });
+  } catch (err) {
+    const error: ApiError & { status?: number; statusText?: string } = {
+      message: "Failed to fetch",
+      status: 0,
+      statusText: "Network Error",
+    };
+    throw error;
+  }
 
   if (!response.ok) {
-    const error: ApiError = await response.json().catch(() => ({
+    const error: ApiError & { status?: number; statusText?: string } = await response.json().catch(() => ({
       message: `HTTP Error: ${response.status}`,
     }));
+    error.status = response.status;
+    error.statusText = response.statusText;
     throw error;
   }
 

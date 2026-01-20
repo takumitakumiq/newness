@@ -18,6 +18,41 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const getLoginErrorMessage = (err: any) => {
+    const detail = err?.detail || err?.message;
+    const nonField = Array.isArray(err?.non_field_errors) ? err.non_field_errors[0] : null;
+    const status = err?.status || err?.statusCode || err?.response?.status;
+    const raw = nonField || detail || "ログインに失敗しました";
+    if (err?.name === "TypeError" || raw === "Failed to fetch") {
+      return "サーバーに接続できません。時間をおいて再度お試しください";
+    }
+    if (status === 401) {
+      return "ユーザー名またはパスワードが正しくありません";
+    }
+    if (status === 403) {
+      return "アクセス権限がありません";
+    }
+    if (status === 500) {
+      return "サーバー側でエラーが発生しました";
+    }
+    if (typeof raw === "string") {
+      if (raw.includes("No active account")) {
+        return "ユーザー名またはパスワードが正しくありません";
+      }
+      if (raw.includes("HTTP Error: 401")) {
+        return "ユーザー名またはパスワードが正しくありません";
+      }
+      if (raw.includes("invalid") || raw.includes("unauthorized")) {
+        return "ユーザー名またはパスワードが正しくありません";
+      }
+      if (raw.includes("inactive")) {
+        return "このアカウントは無効になっています。運営にお問い合わせください";
+      }
+      return raw;
+    }
+    return "ログインに失敗しました。ユーザー名・パスワードをご確認ください。";
+  };
   
   const [formData, setFormData] = useState({
     username: "",
@@ -34,10 +69,15 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
     setLoading(true);
     
     try {
+      if (!formData.username || !formData.password) {
+        setError("ユーザー名とパスワードを入力してください");
+        setLoading(false);
+        return;
+      }
       await login(formData.username, formData.password);
       onSuccess?.();
     } catch (err: any) {
-      setError(err.detail || err.message || "ログインに失敗しました");
+      setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -84,6 +124,9 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
               <p className="text-sm text-muted-foreground">洛星文化祭チケット</p>
             </div>
           </div>
+          <p className="text-sm text-slate-600">
+            来場者の方はログイン後に「日時」「チケット種別」を選んで予約できます
+          </p>
         </div>
 
         <Card className="glass border-festival-neon/20">
@@ -192,6 +235,13 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
                 </motion.p>
               )}
 
+              {mode === "login" && !error && (
+                <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                  ログインできない場合は「ユーザー名」と「パスワード」を再確認してください。
+                  パスワードを忘れた場合は運営までお問い合わせください。
+                </div>
+              )}
+
               <Button type="submit" className="w-full" variant="neon" disabled={loading}>
                 {loading ? (
                   <>
@@ -221,6 +271,15 @@ export function AuthForm({ onSuccess }: AuthFormProps) {
             </form>
           </CardContent>
         </Card>
+
+        <div className="mt-6 bg-white/70 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+          <div className="font-medium text-slate-900 mb-2">ご利用の流れ</div>
+          <ol className="list-decimal pl-5 space-y-1">
+            <li>ログイン / 新規登録</li>
+            <li>希望日時とチケット種別を選択</li>
+            <li>予約内容を確認して確定</li>
+          </ol>
+        </div>
       </motion.div>
     </div>
   );
